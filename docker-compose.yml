@@ -1,0 +1,24 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: corp_assistant_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-assistant}
+      POSTGRES_DB: ${POSTGRES_DB:-assistant}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Бережно к RAM (M5, 16 ГБ): ограничиваем память контейнера
+    mem_limit: 512m
+    mem_reservation: 128m
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c work_mem=4MB
+      -c max_connections=20
+
+volumes:
+  pgdata:
