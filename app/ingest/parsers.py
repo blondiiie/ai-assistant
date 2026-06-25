@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+SUPPORTED_EXTENSIONS = {"pdf": "PDF", "docx": "DOCX", "txt": "TXT"}
+
 
 @dataclass
 class TextBlock:

@@ -7,10 +7,9 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.ingest.parsers import SUPPORTED_EXTENSIONS
 from app.ingest.service import store
 from app.schemas import ErrorResponse, UploadResponse
-
-SUPPORTED = {"pdf": "PDF", "docx": "DOCX", "txt": "TXT"}
 
 
 def create_app() -> FastAPI:
@@ -29,7 +28,7 @@ def create_app() -> FastAPI:
         file: Annotated[UploadFile, File(description="Документ")],
     ) -> JSONResponse:
         ext = (Path(file.filename or "").suffix or "").lower().lstrip(".")
-        doc_type = SUPPORTED.get(ext)
+        doc_type = SUPPORTED_EXTENSIONS.get(ext)
         if doc_type is None:
             raise HTTPException(status_code=400, detail=f"Неподдерживаемый формат: .{ext}")
 
