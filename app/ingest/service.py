@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chunk, Document
@@ -42,7 +42,7 @@ async def store(
             await session.execute(
                 update(Document)
                 .where(Document.source_name == source_name, Document.active.is_(True))
-                .values(active=False)
+                .values(active=False, updated_at=func.now())
             )
             doc = Document(
                 source_name=source_name,

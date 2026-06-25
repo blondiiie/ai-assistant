@@ -39,7 +39,10 @@ def create_app() -> FastAPI:
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Пустой файл")
-        await file.seek(0)
+        if len(content) > settings.max_upload_mb * 1024 * 1024:
+            raise HTTPException(
+                status_code=413, detail=f"Файл больше {settings.max_upload_mb} МБ"
+            )
         with open(dest, "wb") as f:
             f.write(content)
 
@@ -47,6 +50,7 @@ def create_app() -> FastAPI:
         try:
             document_id, chunks_created = await store(name, doc_type, str(dest))
         except ValueError as exc:
+            dest.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

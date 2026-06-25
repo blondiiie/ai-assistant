@@ -19,11 +19,11 @@ async def check_ollama() -> None:
     async with httpx.AsyncClient(timeout=settings.embed_timeout) as client:
         # 1) Эмбеддинг
         emb_resp = await client.post(
-            f"{base}/api/embeddings",
-            json={"model": settings.embed_model, "prompt": probe},
+            f"{base}/api/embed",
+            json={"model": settings.embed_model, "input": [probe]},
         )
         emb_resp.raise_for_status()
-        vector = emb_resp.json()["embedding"]
+        vector = emb_resp.json()["embeddings"][0]
         print(f"[OK] embeddings model={settings.embed_model} dim={len(vector)}")
         assert len(vector) == settings.embed_dimensions, (
             f"ожидалась размерность {settings.embed_dimensions}, "

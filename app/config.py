@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     uploads_dir: str = "data/uploads"
+    max_upload_mb: int = Field(default=50, description="Макс. размер загружаемого файла, МБ")
 
 
 @lru_cache
