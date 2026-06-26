@@ -33,6 +33,7 @@ async def store(
     document_type: str,
     file_path: str,
     file_hash: str | None = None,
+    file_mtime: float | None = None,
 ) -> tuple[int, int]:
     metas = await parse_and_chunk(file_path, document_type)
     vectors = await _embed_chunks(metas)
@@ -52,6 +53,7 @@ async def store(
                 active=True,
                 file_path=str(Path(file_path).resolve()),
                 file_hash=file_hash,
+                file_mtime=file_mtime,
                 deactivated_at=None,
             )
             session.add(doc)

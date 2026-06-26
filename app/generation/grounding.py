@@ -12,7 +12,8 @@ _STOPWORDS = {
     "ему", "теперь", "когда", "даже", "ну", "вдруг", "ли", "если", "уже", "или",
     "быть", "был", "него", "до", "вас", "нибудь", "опять", "уж", "вам", "ведь",
     "там", "потом", "себя", "ничего", "может", "тут", "где", "есть", "надо",
-    "для", "we", "the", "and", "for", "with", "that", "this",
+    "для", "это", "этот", "эта", "эти", "we", "the", "and", "for", "with",
+    "that", "this", "are", "is",
 }
 
 
@@ -20,8 +21,12 @@ def parse_cited_ids(answer: str) -> list[int]:
     return [int(m) for m in CITED_RE.findall(answer)]
 
 
-def _tokens(text: str) -> set[str]:
-    return {t.lower() for t in WORD_RE.findall(text) if t.lower() not in _STOPWORDS}
+def _content_tokens(text: str) -> list[str]:
+    return [t.lower() for t in WORD_RE.findall(text) if t.lower() not in _STOPWORDS]
+
+
+def _token_set(text: str) -> set[str]:
+    return set(_content_tokens(text))
 
 
 def check(answer: str, context_chunk_ids: set[int]) -> tuple[list[int], bool, set[int]]:
@@ -32,14 +37,19 @@ def check(answer: str, context_chunk_ids: set[int]) -> tuple[list[int], bool, se
     return valid_unique, bool(valid_unique), invalid
 
 
-def is_supported(answer: str, cited_contents: list[str], min_overlap: float) -> bool:
+def is_supported(
+    answer: str,
+    cited_contents: list[str],
+    min_overlap: float,
+) -> bool:
     if not cited_contents:
         return False
-    answer_tokens = _tokens(answer)
+    answer_tokens = _content_tokens(answer)
     if not answer_tokens:
         return False
-    cited_tokens: set[str] = set()
+    answer_set = set(answer_tokens)
+    cited_set: set[str] = set()
     for content in cited_contents:
-        cited_tokens |= _tokens(content)
-    overlap = len(answer_tokens & cited_tokens) / len(answer_tokens)
+        cited_set.update(_content_tokens(content))
+    overlap = len(answer_set & cited_set) / len(answer_set)
     return overlap >= min_overlap

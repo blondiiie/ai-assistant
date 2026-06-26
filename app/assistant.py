@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 
+from app.config import settings
 from app.generation.service import STUB_ANSWER
 from app.generation.service import answer as generate_answer
 from app.retrieval.service import search as retrieve
 from app.schemas import ChunkResult
+from app.sync.scanner import ensure_fresh
 
 
 @dataclass
@@ -16,6 +19,9 @@ class AskOutcome:
 
 
 async def ask(question: str) -> AskOutcome:
+    if settings.source_list:
+        with contextlib.suppress(Exception):
+            await ensure_fresh()
     retrieved = await retrieve(question)
     if not retrieved.found:
         return AskOutcome(answer=STUB_ANSWER, grounded=False, sources=[])

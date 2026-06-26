@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {"pdf": "PDF", "docx": "DOCX", "txt": "TXT", "md": "MD"}
 
@@ -36,6 +37,7 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def parse_md(file_path: str) -> list[TextBlock]:
+    title = Path(file_path).stem
     with open(file_path, encoding="utf-8") as f:
         raw = f.read()
     text = _strip_frontmatter(raw)
@@ -51,16 +53,16 @@ def parse_md(file_path: str) -> list[TextBlock]:
         nonlocal buffer
         body = "\n".join(buffer).strip()
         if body:
-            blocks.append(TextBlock(text=body, page=None, section=cur_section))
+            blocks.append(TextBlock(text=f"{title}\n{body}", page=None, section=cur_section))
         buffer = []
 
     for line in text.split("\n"):
         heading = _HEADING_RE.match(line)
         if heading:
             flush()
-            title = heading.group(2).strip()
-            cur_section = title
-            buffer.append(title)
+            title_heading = heading.group(2).strip()
+            cur_section = title_heading
+            buffer.append(title_heading)
         else:
             buffer.append(line)
     flush()

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     embed_timeout: float = 60.0
 
     # --- RAG-параметры ---
-    top_k: int = Field(default=5, description="Сколько чанков доставать из поиска")
+    top_k: int = Field(default=3, description="Сколько чанков доставать из поиска")
     sim_threshold: float = Field(
         default=0.35,
         description="Порог косинусной СХОЖЕСТИ (1 - distance). Ниже = заглушка",
@@ -58,12 +58,16 @@ class Settings(BaseSettings):
         description="Лимит параллельных запросов к Ollama (бережно к RAM/CPU)",
     )
     grounding_max_retries: int = Field(
-        default=1,
+        default=2,
         description="Число повторных генераций при провале grounding",
     )
     grounding_min_overlap: float = Field(
+        default=0.5,
+        description="Мин. доля токенов ответа, покрытая контекстом (анти-галлюцинация)",
+    )
+    source_overlap: float = Field(
         default=0.3,
-        description="Мин. доля токенов ответа, встречающихся в процитированных чанках",
+        description="Мин. пересечение ответа с чанком, чтобы считать чанк источником",
     )
 
     # --- Чанкование ---

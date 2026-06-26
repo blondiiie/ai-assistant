@@ -13,6 +13,8 @@ from app.db.session import async_session
 from app.ingest.parsers import SUPPORTED_EXTENSIONS
 from app.ingest.service import store
 
+_MTIME_EPSILON = 1.0
+
 
 @dataclass
 class ScanResult:
@@ -22,6 +24,7 @@ class ScanResult:
     deactivated: int = 0
     gc_deleted: int = 0
     errors: list[str] = field(default_factory=list)
+    changed: bool = False
 
     def summary(self) -> str:
         return (
@@ -54,24 +57,40 @@ def _iter_files(root: Path):
         yield path
 
 
-async def _active_docs() -> dict[str, str | None]:
+async def _active_docs() -> dict[str, tuple[str | None, float | None]]:
     async with async_session() as session:
         result = await session.execute(
-            select(Document.source_name, Document.file_hash).where(Document.active.is_(True))
+            select(Document.source_name, Document.file_hash, Document.file_mtime).where(
+                Document.active.is_(True)
+            )
         )
-        return {source_name: file_hash for source_name, file_hash in result.all()}
+        return {
+            row.source_name: (row.file_hash, row.file_mtime) for row in result.all()
+        }
 
 
-async def _index(source_name, path, doc_type, file_hash, result: ScanResult, *, changed: bool):
+async def _index(source_name, path, doc_type, result: ScanResult, *, changed: bool):
     try:
-        await store(source_name, doc_type, str(path), file_hash=file_hash)
-    except (ValueError, RuntimeError) as exc:
+        digest = _sha256(path)
+        mtime = path.stat().st_mtime
+        await store(source_name, doc_type, str(path), file_hash=digest, file_mtime=mtime)
+    except (ValueError, RuntimeError, OSError) as exc:
         result.errors.append(f"{source_name}: {exc}")
         return
+    result.changed = True
     if changed:
         result.reindexed += 1
     else:
         result.indexed += 1
+
+
+async def _touch_mtime(source_name: str, mtime: float) -> None:
+    async with async_session() as session, session.begin():
+        await session.execute(
+            update(Document)
+            .where(Document.source_name == source_name, Document.active.is_(True))
+            .values(file_mtime=mtime)
+        )
 
 
 async def _gc() -> int:
@@ -93,9 +112,9 @@ async def _gc() -> int:
         return len(ids)
 
 
-async def scan() -> ScanResult:
+async def _scan(run_gc: bool) -> ScanResult:
     result = ScanResult()
-    on_disk: dict[str, tuple[Path, str, str]] = {}
+    on_disk: dict[str, tuple[Path, str, float]] = {}
 
     for root_str in settings.source_list:
         root = Path(root_str).expanduser()
@@ -109,22 +128,29 @@ async def scan() -> ScanResult:
             rel = path.relative_to(root).as_posix()
             source_name = f"{root_name}/{rel}"
             try:
-                digest = _sha256(path)
+                mtime = path.stat().st_mtime
             except OSError as exc:
                 result.errors.append(f"{source_name}: {exc}")
                 continue
-            on_disk[source_name] = (path, doc_type, digest)
+            on_disk[source_name] = (path, doc_type, mtime)
 
     active = await _active_docs()
 
-    for source_name, (path, doc_type, digest) in on_disk.items():
+    for source_name, (path, doc_type, mtime) in on_disk.items():
         existing = active.get(source_name)
         if existing is None:
-            await _index(source_name, path, doc_type, digest, result, changed=False)
-        elif existing != digest:
-            await _index(source_name, path, doc_type, digest, result, changed=True)
-        else:
+            await _index(source_name, path, doc_type, result, changed=False)
+            continue
+        stored_hash, stored_mtime = existing
+        if stored_mtime is not None and abs(stored_mtime - mtime) < _MTIME_EPSILON:
             result.skipped += 1
+            continue
+        digest = _sha256(path)
+        if stored_hash == digest:
+            await _touch_mtime(source_name, mtime)
+            result.skipped += 1
+        else:
+            await _index(source_name, path, doc_type, result, changed=True)
 
     missing = [sn for sn in active if sn not in on_disk]
     if missing:
@@ -135,6 +161,16 @@ async def scan() -> ScanResult:
                 .values(active=False, deactivated_at=func.now())
             )
         result.deactivated = len(missing)
+        result.changed = True
 
-    result.gc_deleted = await _gc()
+    if run_gc:
+        result.gc_deleted = await _gc()
     return result
+
+
+async def scan() -> ScanResult:
+    return await _scan(run_gc=True)
+
+
+async def ensure_fresh() -> ScanResult:
+    return await _scan(run_gc=False)

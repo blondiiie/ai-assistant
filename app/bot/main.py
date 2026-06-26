@@ -22,11 +22,13 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 INLINE_CITE_RE = re.compile(r"\s*\[c\d+\]\s*")
+CONTEXT_HEADER_RE = re.compile(r"\([^)]*Файл:\s*[^)]*\)\s*:?\s*")
 
 
 def _format(outcome) -> str:
-    text = INLINE_CITE_RE.sub(" ", outcome.answer).strip()
-    text = re.sub(r"\s{2,}", " ", text)
+    text = CONTEXT_HEADER_RE.sub(" ", outcome.answer)
+    text = INLINE_CITE_RE.sub(" ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
     if not outcome.grounded or not outcome.sources:
         return text
     seen: set[tuple[str, str]] = set()

@@ -16,6 +16,7 @@ STATEMENTS = [
         active BOOLEAN NOT NULL DEFAULT TRUE,
         file_path TEXT NOT NULL,
         file_hash CHAR(64),
+        file_mtime DOUBLE PRECISION,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ,
         deactivated_at TIMESTAMPTZ,
@@ -36,6 +37,7 @@ STATEMENTS = [
     )
     """,
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_hash CHAR(64)",
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_mtime DOUBLE PRECISION",
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ",
     "ALTER TABLE documents ALTER COLUMN source_name TYPE TEXT",
     "ALTER TABLE documents DROP CONSTRAINT IF EXISTS ck_documents_type",
