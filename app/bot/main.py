@@ -8,11 +8,15 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from sqlalchemy import func, select
 
 from app.assistant import ask
 from app.config import settings
+from app.db.models import Chunk, Document
+from app.db.session import async_session
 from app.ingest.parsers import SUPPORTED_EXTENSIONS
 from app.ingest.service import store
+from app.sync.scanner import scan as scan_sources
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -23,20 +27,23 @@ INLINE_CITE_RE = re.compile(r"\s*\[c\d+\]\s*")
 def _format(outcome) -> str:
     text = INLINE_CITE_RE.sub(" ", outcome.answer).strip()
     text = re.sub(r"\s{2,}", " ", text)
-    if not outcome.grounded:
+    if not outcome.grounded or not outcome.sources:
         return text
-    seen: set[tuple[str, int | None]] = set()
+    seen: set[tuple[str, str]] = set()
     footer: list[str] = []
     for s in outcome.sources:
-        key = (s.source_name, s.page)
+        if s.section:
+            loc = f"раздел «{s.section}»"
+        elif s.page:
+            loc = f"стр. {s.page}"
+        else:
+            loc = "без раздела"
+        key = (s.source_name, loc)
         if key in seen:
             continue
         seen.add(key)
-        loc = f"стр. {s.page}" if s.page is not None else "без страницы"
-        footer.append(f"📄 {s.source_name} ({loc})")
-    if footer:
-        return f"{text}\n\nИсточники:\n" + "\n".join(footer)
-    return text
+        footer.append(f"[Источник: {s.source_name} · {loc}]")
+    return f"{text}\n\n" + "\n".join(footer)
 
 
 def _is_allowed(message: Message) -> bool:
@@ -66,7 +73,46 @@ async def cmd_upload(message: Message) -> None:
         return
     await message.answer(
         "Пришли файл документа (PDF, DOCX или TXT) сообщением. "
-        "Я его проиндексирую — после этого по нему можно будет задавать вопросы."
+        "Я его проиндексирую — после этого по нему можно будет задавать вопросы.\n\n"
+        "Также: /rescan — переиндексировать источники, /status — статистика."
+    )
+
+
+async def cmd_rescan(message: Message) -> None:
+    if not _is_allowed(message):
+        await message.answer("Доступ запрещён. Обратитесь к администратору.")
+        return
+    await message.answer("Сканирую источники…")
+    try:
+        result = await scan_sources()
+    except Exception:
+        logger.exception("rescan failed for chat %s", message.chat.id)
+        await message.answer("Ошибка при сканировании. Подробности в логах.")
+        return
+    text = f"Готово. {result.summary()}"
+    if result.errors:
+        text += "\n\nОшибки:\n" + "\n".join(result.errors[:5])
+    await message.answer(text)
+
+
+async def cmd_status(message: Message) -> None:
+    if not _is_allowed(message):
+        await message.answer("Доступ запрещён. Обратитесь к администратору.")
+        return
+    async with async_session() as session:
+        docs = (
+            await session.execute(
+                select(func.count()).select_from(Document).where(Document.active.is_(True))
+            )
+        ).scalar_one()
+        chunks = (
+            await session.execute(
+                select(func.count(Chunk.id)).join(Document).where(Document.active.is_(True))
+            )
+        ).scalar_one()
+    sources = ", ".join(settings.source_list) or "(не заданы)"
+    await message.answer(
+        f"Источники: {sources}\nАктивных документов: {docs}\nАктивных чанков: {chunks}"
     )
 
 
@@ -140,6 +186,8 @@ def build_dispatcher() -> Dispatcher:
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_upload, Command("upload"))
+    dp.message.register(cmd_rescan, Command("rescan"))
+    dp.message.register(cmd_status, Command("status"))
     dp.message.register(handle_document, F.document)
     dp.message.register(handle_question, F.text)
     return dp
@@ -151,6 +199,15 @@ async def main() -> None:
         sys.exit(1)
     bot = Bot(settings.telegram_bot_token)
     dp = build_dispatcher()
+    if settings.source_list:
+        print("Стартовый скан источников…")
+        try:
+            result = await scan_sources()
+            print("Скан: " + result.summary())
+        except Exception:
+            print("Стартовый скан завершился ошибкой — бот всё равно запускается.")
+    else:
+        print("SOURCE_DIRS не заданы — стартовый скан пропущен.")
     print("Бот запущен. Ctrl+C для остановки.")
     await dp.start_polling(bot)
 

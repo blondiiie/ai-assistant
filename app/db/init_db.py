@@ -10,14 +10,16 @@ STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS documents (
         id BIGSERIAL PRIMARY KEY,
-        source_name VARCHAR(200) NOT NULL,
+        source_name TEXT NOT NULL,
         document_type VARCHAR(4) NOT NULL,
         version INT NOT NULL DEFAULT 1,
         active BOOLEAN NOT NULL DEFAULT TRUE,
         file_path TEXT NOT NULL,
+        file_hash CHAR(64),
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ,
-        CONSTRAINT ck_documents_type CHECK (document_type IN ('PDF','DOCX','TXT'))
+        deactivated_at TIMESTAMPTZ,
+        CONSTRAINT ck_documents_type CHECK (document_type IN ('PDF','DOCX','TXT','MD'))
     )
     """,
     """
@@ -33,6 +35,12 @@ STATEMENTS = [
         CONSTRAINT uq_chunks_doc_index UNIQUE (document_id, chunk_index)
     )
     """,
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS file_hash CHAR(64)",
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ",
+    "ALTER TABLE documents ALTER COLUMN source_name TYPE TEXT",
+    "ALTER TABLE documents DROP CONSTRAINT IF EXISTS ck_documents_type",
+    "ALTER TABLE documents ADD CONSTRAINT ck_documents_type "
+    "CHECK (document_type IN ('PDF','DOCX','TXT','MD'))",
     "CREATE INDEX IF NOT EXISTS ix_chunks_document_id ON chunks (document_id)",
     "CREATE INDEX IF NOT EXISTS ix_chunks_tsv ON chunks USING GIN (tsv)",
     """

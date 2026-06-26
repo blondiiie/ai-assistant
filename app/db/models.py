@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Computed,
+    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -34,20 +35,22 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
     document_type: Mapped[str] = mapped_column(String(4), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     chunks: Mapped[list[Chunk]] = relationship(back_populates="document")
 
     __table_args__ = (
-        CheckConstraint("document_type in ('PDF','DOCX','TXT')", name="ck_documents_type"),
+        CheckConstraint("document_type in ('PDF','DOCX','TXT','MD')", name="ck_documents_type"),
     )
 
 

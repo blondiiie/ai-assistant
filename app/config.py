@@ -88,6 +88,28 @@ class Settings(BaseSettings):
     uploads_dir: str = "data/uploads"
     max_upload_mb: int = Field(default=50, description="Макс. размер загружаемого файла, МБ")
 
+    # --- Источники / синхронизация ---
+    source_dirs: str = Field(
+        default="",
+        description="CSV абсолютных путей к источникам (Obsidian vault / папки)",
+    )
+    ignore_dirs: str = Field(
+        default=".obsidian,.trash",
+        description="CSV имён директорий, которые игнорируются при сканировании",
+    )
+    gc_retention_days: int = Field(
+        default=30,
+        description="Дней до физического удаления деактивированных документов",
+    )
+
+    @property
+    def source_list(self) -> list[str]:
+        return [x.strip() for x in self.source_dirs.split(",") if x.strip()]
+
+    @property
+    def ignore_set(self) -> set[str]:
+        return {x.strip() for x in self.ignore_dirs.split(",") if x.strip()}
+
 
 @lru_cache
 def get_settings() -> Settings:
