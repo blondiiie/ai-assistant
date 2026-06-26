@@ -23,6 +23,11 @@ logging.basicConfig(level=logging.INFO)
 
 INLINE_CITE_RE = re.compile(r"[ \t]*\[c\d+\][ \t]*")
 CONTEXT_HEADER_RE = re.compile(r"[ \t]*\([^)]*Файл:\s*[^)]*\)[ \t]*:?[ \t]*")
+MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+MD_STAR_RE = re.compile(r"(?<!\w)\*([^*\n]+?)\*(?!\w)")
+MD_ITALIC_RE = re.compile(r"(?<![\wА-Яа-яЁё])_([^_\n]+?)_(?![\wА-Яа-яЁё])")
+MD_HASH_RE = re.compile(r"(?m)^#{1,6}\s+")
+BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _SOURCE_EXT = (".md", ".pdf", ".docx", ".txt")
 
 
@@ -33,9 +38,19 @@ def _display_source(name: str) -> str:
     return name
 
 
+def _strip_markdown(text: str) -> str:
+    text = MD_BOLD_RE.sub(r"\1", text)
+    text = MD_STAR_RE.sub(r"\1", text)
+    text = MD_ITALIC_RE.sub(r"\1", text)
+    text = BACKTICK_RE.sub(r"\1", text)
+    text = MD_HASH_RE.sub("", text)
+    return text
+
+
 def _format(outcome) -> str:
     text = CONTEXT_HEADER_RE.sub(" ", outcome.answer)
     text = INLINE_CITE_RE.sub(" ", text)
+    text = _strip_markdown(text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()

@@ -10,6 +10,13 @@ from app.retrieval.service import search as retrieve
 from app.schemas import ChunkResult
 from app.sync.scanner import ensure_fresh
 
+_BROAD_HINTS = ("всё", "всех", "все", "подробнее", "расскажи", "опиши", "целиком", "полностью")
+
+
+def _is_broad(question: str) -> bool:
+    lowered = question.lower()
+    return any(hint in lowered for hint in _BROAD_HINTS)
+
 
 @dataclass
 class AskOutcome:
@@ -22,7 +29,8 @@ async def ask(question: str) -> AskOutcome:
     if settings.source_list:
         with contextlib.suppress(Exception):
             await ensure_fresh()
-    retrieved = await retrieve(question)
+    top_k = settings.top_k_broad if _is_broad(question) else None
+    retrieved = await retrieve(question, top_k=top_k)
     if not retrieved.found:
         return AskOutcome(answer=STUB_ANSWER, grounded=False, sources=[])
 

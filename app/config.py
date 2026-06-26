@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     # --- RAG-параметры ---
     top_k: int = Field(default=3, description="Сколько чанков доставать из поиска")
+    top_k_broad: int = Field(
+        default=6,
+        description="Чанков для обзорных вопросов («расскажи всё/подробнее»)",
+    )
     sim_threshold: float = Field(
         default=0.35,
         description="Порог косинусной СХОЖЕСТИ (1 - distance). Ниже = заглушка",
