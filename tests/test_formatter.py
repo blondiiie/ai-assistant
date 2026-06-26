@@ -17,7 +17,7 @@ def test_format_strips_citations_and_adds_source() -> None:
     )
     out = _format(outcome)
     assert "[c10]" not in out
-    assert "[Источник: vault/JSON.md · раздел «Основное»]" in out
+    assert "[Источник: vault/JSON · раздел «Основное»]" in out
 
 
 def test_format_dedupes_sources() -> None:
@@ -43,3 +43,24 @@ def test_format_fallback_page_when_no_section() -> None:
     )
     out = _format(outcome)
     assert "стр. 4" in out
+
+
+def test_format_preserves_newlines() -> None:
+    outcome = SimpleNamespace(
+        answer="1) Метод: действие [c1]\n2) Путь: ресурс [c1]",
+        grounded=True,
+        sources=[_src("a.md", "S")],
+    )
+    out = _format(outcome)
+    assert "1) Метод: действие\n2) Путь: ресурс" in out
+
+
+def test_format_strips_source_extension() -> None:
+    outcome = SimpleNamespace(
+        answer="ответ [c3]",
+        grounded=True,
+        sources=[_src("vault/HTTP/Запрос.md", "S")],
+    )
+    out = _format(outcome)
+    assert ".md" not in out
+    assert "Запрос" in out

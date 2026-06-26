@@ -21,14 +21,24 @@ from app.sync.scanner import scan as scan_sources
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-INLINE_CITE_RE = re.compile(r"\s*\[c\d+\]\s*")
-CONTEXT_HEADER_RE = re.compile(r"\([^)]*Файл:\s*[^)]*\)\s*:?\s*")
+INLINE_CITE_RE = re.compile(r"[ \t]*\[c\d+\][ \t]*")
+CONTEXT_HEADER_RE = re.compile(r"[ \t]*\([^)]*Файл:\s*[^)]*\)[ \t]*:?[ \t]*")
+_SOURCE_EXT = (".md", ".pdf", ".docx", ".txt")
+
+
+def _display_source(name: str) -> str:
+    for ext in _SOURCE_EXT:
+        if name.endswith(ext):
+            return name[: -len(ext)]
+    return name
 
 
 def _format(outcome) -> str:
     text = CONTEXT_HEADER_RE.sub(" ", outcome.answer)
     text = INLINE_CITE_RE.sub(" ", text)
-    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not outcome.grounded or not outcome.sources:
         return text
     seen: set[tuple[str, str]] = set()
@@ -40,11 +50,12 @@ def _format(outcome) -> str:
             loc = f"стр. {s.page}"
         else:
             loc = "без раздела"
-        key = (s.source_name, loc)
+        source = _display_source(s.source_name)
+        key = (source, loc)
         if key in seen:
             continue
         seen.add(key)
-        footer.append(f"[Источник: {s.source_name} · {loc}]")
+        footer.append(f"[Источник: {source} · {loc}]")
     return f"{text}\n\n" + "\n".join(footer)
 
 
@@ -173,7 +184,7 @@ async def handle_question(message: Message) -> None:
     question = (message.text or "").strip()
     if not question:
         return
-    await message.answer("Ищу в регламентах…")
+    await message.answer("Ищу по заметкам…")
     try:
         outcome = await ask(question)
     except Exception:
