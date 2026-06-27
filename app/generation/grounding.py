@@ -29,6 +29,13 @@ def _token_set(text: str) -> set[str]:
     return set(_content_tokens(text))
 
 
+def _char_ngrams(text: str, n: int = 3) -> set[str]:
+    s = re.sub(r"[^0-9a-zа-яё]+", "", text.lower())
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i : i + n] for i in range(len(s) - n + 1)}
+
+
 def check(answer: str, context_chunk_ids: set[int]) -> tuple[list[int], bool, set[int]]:
     cited = parse_cited_ids(answer)
     valid_ordered = [cid for cid in cited if cid in context_chunk_ids]
@@ -44,12 +51,11 @@ def is_supported(
 ) -> bool:
     if not cited_contents:
         return False
-    answer_tokens = _content_tokens(answer)
-    if not answer_tokens:
+    answer_grams = _char_ngrams(answer)
+    if not answer_grams:
         return False
-    answer_set = set(answer_tokens)
-    cited_set: set[str] = set()
+    cited_grams: set[str] = set()
     for content in cited_contents:
-        cited_set.update(_content_tokens(content))
-    overlap = len(answer_set & cited_set) / len(answer_set)
+        cited_grams |= _char_ngrams(content)
+    overlap = len(answer_grams & cited_grams) / len(answer_grams)
     return overlap >= min_overlap

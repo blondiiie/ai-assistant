@@ -25,17 +25,17 @@ def test_check_no_valid_citation() -> None:
 def test_is_supported_overlap() -> None:
     answer = "Заявление на отпуск подаётся за 14 дней"
     cited = ["Заявление на оплачиваемый отпуск подаётся не позднее 14 дней"]
-    assert is_supported(answer, cited, min_overlap=0.5) is True
+    assert is_supported(answer, cited, min_overlap=0.35) is True
 
 
 def test_is_supported_unrelated() -> None:
     answer = "Стоимость билета на Марс составляет миллион"
     cited = ["Заявление на оплачиваемый отпуск подаётся за 14 дней"]
-    assert is_supported(answer, cited, min_overlap=0.5) is False
+    assert is_supported(answer, cited, min_overlap=0.35) is False
 
 
 def test_is_supported_empty() -> None:
-    assert is_supported("ответ", [], min_overlap=0.5) is False
+    assert is_supported("ответ", [], min_overlap=0.35) is False
 
 
 def test_is_supported_rejects_hallucinated_terms() -> None:
@@ -43,4 +43,4 @@ def test_is_supported_rejects_hallucinated_terms() -> None:
     cited = [
         "Уровень 0: сервисы используют HTTP как транспорт и один HTTP-глагол POST"
     ]
-    assert is_supported(answer, cited, min_overlap=0.5) is False
+    assert is_supported(answer, cited, min_overlap=0.35) is False

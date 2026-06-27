@@ -66,8 +66,8 @@ class Settings(BaseSettings):
         description="Число повторных генераций при провале grounding",
     )
     grounding_min_overlap: float = Field(
-        default=0.5,
-        description="Мин. доля токенов ответа, покрытая контекстом (анти-галлюцинация)",
+        default=0.35,
+        description="Мин. доля 3-грамм ответа, покрытая контекстом (анти-галлюцинация)",
     )
     source_overlap: float = Field(
         default=0.3,
