@@ -73,8 +73,8 @@ class Settings(BaseSettings):
         description="Расширять ли поиск по графу wikilinks (Obsidian-заметки)",
     )
     link_expansion_chunks: int = Field(
-        default=8,
-        description="Максимум доп. чанков из связанных заметок при расширении",
+        default=3,
+        description="Максимум доп. чанков из связанных заметок (узкие вопросы не заливаются)",
     )
     max_concurrent_llm: int = Field(
         default=1,

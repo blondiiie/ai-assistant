@@ -74,3 +74,25 @@ def build_messages(question: str, chunks: list[ChunkResult]) -> list[dict[str, s
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+
+
+RECOVERY_INSTRUCTION = (
+    "Контекст выше релевантен вопросу. Не отказывайся преждевременно: если ответ "
+    "выводится из контекста (в т.ч. через отрицание, переформулировку, ответ «нет» "
+    "на вопрос-утверждение) — дай его строго по контексту. Маркер NOANSWER — только "
+    "если информации действительно нет."
+)
+
+
+def build_recovery_messages(question: str, chunks: list[ChunkResult]) -> list[dict[str, str]]:
+    """Вариант промпта против ложных отказов: явное указание выводить ответ."""
+    context = build_context(chunks)
+    user = (
+        f"Контекст:\n{context}\n\n"
+        f"Вопрос пользователя: {question}\n\n"
+        f"{RECOVERY_INSTRUCTION} Не выдумывай фактов вне контекста."
+    )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
