@@ -4,6 +4,7 @@ from app.generation.grounding import (
     check,
     is_refusal,
     is_supported,
+    is_word_supported,
     missing_distinctive_tokens,
     parse_cited_ids,
 )
@@ -100,6 +101,27 @@ def test_missing_distinctive_catches_invented_abbreviation() -> None:
     answer = "REST использует протокол CRUD для операций."
     cited = ["REST — концепция клиент-серверной архитектуры."]
     assert missing_distinctive_tokens(answer, cited) == set()
+
+
+def test_is_word_supported_accepts_faithful_rephrase() -> None:
+    # Связный ответ теми же словами, что в источнике — проходит.
+    answer = "Код 500 Internal Server Error означает, что сервер упал или выбросил исключение."
+    cited = ["500 Internal Server Error - Сервер упал/выбросил исключение"]
+    assert is_word_supported(answer, cited, min_coverage=0.6) is True
+
+
+def test_is_word_supported_rejects_drift_to_model_knowledge() -> None:
+    # Модель перефразировала своими словами — много новых содержательных слов.
+    answer = (
+        "Код 500 Internal Server Error означает, что сервер столкнулся с "
+        "необработанной ошибкой и не может выполнить запрос клиента."
+    )
+    cited = ["500 Internal Server Error - Сервер упал/выбросил исключение"]
+    assert is_word_supported(answer, cited, min_coverage=0.6) is False
+
+
+def test_is_word_supported_empty() -> None:
+    assert is_word_supported("ответ", [], min_coverage=0.6) is False
 
 
 def test_missing_distinctive_ignores_trivial_latin() -> None:

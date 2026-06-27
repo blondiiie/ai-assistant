@@ -84,6 +84,46 @@ def is_supported(
 
 _NUM_RE = re.compile(r"\d{2,}")
 _CITE_TAG_RE = re.compile(r"\[c\d+\]")
+_STEM_LEN = 6
+
+
+def _stem_token(word: str) -> str:
+    """Лёгкий стемминг: префикс фиксированной длины — терпимость к морфологии
+    RU/EN («сервер»/«сервера»/«упал»/«упало» совпадают по префиксу)."""
+    word = word.lower()
+    return word[:_STEM_LEN] if len(word) > _STEM_LEN else word
+
+
+def _content_stems(text: str) -> set[str]:
+    return {_stem_token(t) for t in WORD_RE.findall(text) if t.lower() not in _STOPWORDS}
+
+
+def is_word_supported(
+    answer: str,
+    cited_contents: list[str],
+    min_coverage: float,
+) -> bool:
+    """Словарная верность ответа контексту (по всему ответу, со стеммингом).
+
+    Доля содержательных слов ответа, присутствующих в контексте, должна быть
+    >= min_coverage. Ловит дрейф в свои знания: напр. источник «500 — Сервер
+    упал/выбросил исключение», а ответ «сервер столкнулся с необработанной
+    ошибкой и не может выполнить запрос клиента» — много новой лексики →
+    низкое покрытие (~0.38) → провал. Связный верный ответ держит покрытие
+    ~0.7+, короткие связки/переводы усредняются и не рубят ответ.
+    """
+    if not cited_contents:
+        return False
+    answer_stems = _content_stems(_CITE_TAG_RE.sub(" ", answer))
+    if not answer_stems:
+        return False
+    ctx_stems: set[str] = set()
+    for content in cited_contents:
+        ctx_stems |= _content_stems(content)
+    if not ctx_stems:
+        return False
+    covered = answer_stems & ctx_stems
+    return len(covered) / len(answer_stems) >= min_coverage
 
 
 def missing_distinctive_tokens(

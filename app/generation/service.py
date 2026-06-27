@@ -7,6 +7,7 @@ from app.generation.grounding import (
     _content_tokens,
     is_refusal,
     is_supported,
+    is_word_supported,
     missing_distinctive_tokens,
 )
 from app.generation.prompt import CANNOT_ANSWER, build_messages
@@ -55,10 +56,13 @@ async def answer(question: str, context_chunks: list[ChunkResult]) -> GenerateRe
         cleaned = _clean(raw)
         if not cleaned or cleaned == STUB_ANSWER or is_refusal(cleaned):
             continue
-        if is_supported(cleaned, all_contents, settings.grounding_min_overlap):
-            if missing_distinctive_tokens(cleaned, all_contents):
-                continue
-            src_ids = _source_ids(cleaned, context_chunks, settings.source_overlap)
-            return GenerateResult(answer=cleaned, cited_chunk_ids=src_ids, grounded=True)
+        if not is_supported(cleaned, all_contents, settings.grounding_min_overlap):
+            continue
+        if not is_word_supported(cleaned, all_contents, settings.grounding_word_coverage):
+            continue
+        if missing_distinctive_tokens(cleaned, all_contents):
+            continue
+        src_ids = _source_ids(cleaned, context_chunks, settings.source_overlap)
+        return GenerateResult(answer=cleaned, cited_chunk_ids=src_ids, grounded=True)
 
     return GenerateResult(answer=STUB_ANSWER, cited_chunk_ids=[], grounded=False)

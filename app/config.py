@@ -92,6 +92,10 @@ class Settings(BaseSettings):
         default=0.3,
         description="Мин. пересечение ответа с чанком, чтобы считать чанк источником",
     )
+    grounding_word_coverage: float = Field(
+        default=0.55,
+        description="Мин. доля содержательных слов ответа (со стеммингом) в контексте — анти-дрейф",
+    )
 
     # --- Чанкование ---
     chunk_size: int = 512

@@ -194,23 +194,24 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
 
     relevant = _apply_topic_gate(gapped, query)
 
-    if settings.link_expansion and relevant:
-        relevant_doc_ids = {r["document_id"] for r in relevant}
-        relevant_stems = {_stem(r["source_name"]) for r in relevant}
-        neighbor_ids = _resolve_neighbor_doc_ids(
-            relevant_doc_ids, relevant_stems, active_docs, all_links
-        )
-        extra = await _neighbor_chunks(neighbor_ids, qvec, query, vec_str)
-        if extra:
-            existing_ids = {r["chunk_id"] for r in relevant}
-            extra = [r for r in extra if r["chunk_id"] not in existing_ids]
-            extra.sort(key=lambda r: r["sim"], reverse=True)
-            extra = extra[: settings.link_expansion_chunks]
-            relevant = relevant + extra
-
     scored = _hybrid_score(relevant, settings.hybrid_alpha)
     scored.sort(key=lambda r: r["score"], reverse=True)
     top = scored[:top_k]
+    core_ids = {r["chunk_id"] for r in top}
+
+    if settings.link_expansion and top:
+        top_doc_ids = {r["document_id"] for r in top}
+        top_stems = {_stem(r["source_name"]) for r in top}
+        neighbor_ids = _resolve_neighbor_doc_ids(
+            top_doc_ids, top_stems, active_docs, all_links
+        )
+        extra = await _neighbor_chunks(neighbor_ids, qvec, query, vec_str)
+        if extra:
+            extra = [r for r in extra if r["chunk_id"] not in core_ids]
+            extra.sort(key=lambda r: r["sim"], reverse=True)
+            top = top + extra[: settings.link_expansion_chunks]
+
+    final = _hybrid_score(top, settings.hybrid_alpha)
 
     results = [
         ChunkResult(
@@ -221,6 +222,6 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
             source_name=r["source_name"],
             score=round(float(r["score"]), 4),
         )
-        for r in top
+        for r in final
     ]
     return RetrieveResult(found=True, results=results)
