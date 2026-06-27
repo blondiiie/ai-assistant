@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import re
 
+# Единый «алфавит» допустимых письменностей — источник правды и для WORD_RE
+# (что считать словом), и для проверки посторонних письменностей. Менять —
+# только здесь, чтобы два механизма не разошлись.
+ALLOWED_ALPHABET = "0-9a-zA-Zа-яА-ЯёЁ"
+
 CITED_RE = re.compile(r"c(\d+)")
-WORD_RE = re.compile(r"[0-9a-zа-яё]{2,}", re.IGNORECASE)
+WORD_RE = re.compile(rf"[{ALLOWED_ALPHABET}]{{2,}}")
 
 _STOPWORDS = {
     "и", "в", "во", "не", "что", "он", "на", "я", "с", "со", "как", "а", "то",
@@ -83,8 +88,21 @@ def is_supported(
 
 
 _NUM_RE = re.compile(r"\d{2,}")
-_CITE_TAG_RE = re.compile(r"\[c\d+\]")
+CITE_TAG_RE = re.compile(r"\[c\d+\]")
 _STEM_LEN = 6
+
+# Разрешённые «несмысловые» связки/маркеры списков — не режутся фильтром.
+_CONNECTOR_RE = re.compile(
+    r"^(?:таким\s+образом|итак|следовательно|в\s+итоге|то\s+есть|"
+    r"т\.е\.|например|далее|также|кроме\s+того|однако|но|и|или)$",
+    re.IGNORECASE,
+)
+
+# Запрещённый символ = любой вне алфавита + базовой пунктуации/пробелов.
+# Алфавит берётся из ALLOWED_ALPHABET, чтобы не разойтись с WORD_RE.
+_ALLOWED_CHARS_RE = re.compile(
+    rf"[^{ALLOWED_ALPHABET}\s.,:;\-!?()/\[\]\"'«»—–\n]"
+)
 
 
 def _stem_token(word: str) -> str:
@@ -114,7 +132,7 @@ def is_word_supported(
     """
     if not cited_contents:
         return False
-    answer_stems = _content_stems(_CITE_TAG_RE.sub(" ", answer))
+    answer_stems = _content_stems(CITE_TAG_RE.sub(" ", answer))
     if not answer_stems:
         return False
     ctx_stems: set[str] = set()
@@ -140,7 +158,160 @@ def missing_distinctive_tokens(
     """
     if not cited_contents:
         return set()
-    answer = _CITE_TAG_RE.sub(" ", answer)
+    answer = CITE_TAG_RE.sub(" ", answer)
     ctx_lower = " \n".join(c.lower() for c in cited_contents)
     nums = set(_NUM_RE.findall(answer))
     return {n for n in nums if n not in ctx_lower}
+
+
+# --- Посентенсная строгая проверка (точечное вырезание галлюцинаций) ---
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def has_foreign_script(text: str) -> bool:
+    """True, если в тексте есть символы неразрешённых письменностей.
+
+    Ловит утечку токенов модели в чужую письменность (китайские иероглифы,
+    арабица и т.п.) — основной симптом деградации ответа. Кириллица, латиница,
+    цифры и базовая пунктуация считаются разрешёнными.
+    """
+    return bool(_ALLOWED_CHARS_RE.search(CITE_TAG_RE.sub("", text)))
+
+
+_LIST_MARKER_RE = re.compile(r"^\d+[.)]?$|^[-*•]$")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Разбивает ответ на предложения/пункты списка, сохраняя структуру.
+
+    Раздел — по переводам строк и по завершающей пунктуации (.!?). Маркеры
+    нумерованных/маркированных списков («1.», «-») приклеиваются к следующему
+    за ними содержимому. Пустые фрагменты отбрасываются.
+    """
+    raw: list[str] = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        for chunk in _SENT_SPLIT_RE.split(line):
+            chunk = chunk.strip()
+            if chunk:
+                raw.append(chunk)
+    parts: list[str] = []
+    i = 0
+    while i < len(raw):
+        frag = raw[i]
+        if _LIST_MARKER_RE.match(frag) and i + 1 < len(raw):
+            parts.append(f"{frag} {raw[i + 1]}")
+            i += 2
+        else:
+            parts.append(frag)
+            i += 1
+    return [p for p in parts if p.strip()]
+
+
+def _is_connector(sentence: str) -> bool:
+    stripped = CITE_TAG_RE.sub("", sentence).strip(" .,:;-—").lower()
+    return bool(stripped) and bool(_CONNECTOR_RE.match(stripped))
+
+
+def _sentence_supported(
+    sentence: str,
+    ctx_stems: set[str],
+    ctx_lower: str,
+    *,
+    min_coverage: float,
+) -> bool:
+    if _is_connector(sentence):
+        return True
+    sent_clean = CITE_TAG_RE.sub(" ", sentence)
+    # числа 2+ цифр обязаны быть в контексте — высокоточный сигнал галлюцинации;
+    # проверяем ДО раннего возврата, иначе «тощие» предложения из одних цифр
+    # обходили бы числовую проверку.
+    nums = _NUM_RE.findall(sent_clean)
+    if nums and not all(n in ctx_lower for n in nums):
+        return False
+    stems = _content_stems(sent_clean)
+    if not stems:
+        return True
+    covered = stems & ctx_stems
+    return len(covered) / len(stems) >= min_coverage
+
+
+def _mark_unsupported(
+    sentences: list[str],
+    cited_contents: list[str],
+    *,
+    min_coverage: float,
+) -> list[tuple[int, str]]:
+    """Внутренняя: индексы+причины неподдержанных предложений (без повторного
+    разбиения — предложения передаются готовыми)."""
+    if not cited_contents:
+        return [(i, "coverage") for i in range(len(sentences))]
+    ctx_stems: set[str] = set()
+    for c in cited_contents:
+        ctx_stems |= _content_stems(c)
+    ctx_lower = " \n".join(c.lower() for c in cited_contents)
+
+    result: list[tuple[int, str]] = []
+    for i, sent in enumerate(sentences):
+        if has_foreign_script(sent):
+            result.append((i, "foreign"))
+            continue
+        if not _sentence_supported(sent, ctx_stems, ctx_lower, min_coverage=min_coverage):
+            result.append((i, "coverage"))
+    return result
+
+
+def unsupported_sentences(
+    answer: str,
+    cited_contents: list[str],
+    *,
+    min_coverage: float,
+) -> list[tuple[int, str]]:
+    """Для каждого предложения флага: поддержано ли оно контекстом.
+
+    Возвращает список (индекс, причина) неподдержанных предложений. Причины:
+    'foreign' — посторонняя письменность; 'coverage' — мало слов из контекста
+    либо выдуманные числа (числовая проверка входит в покрытие).
+    """
+    return _mark_unsupported(
+        split_sentences(answer), cited_contents, min_coverage=min_coverage
+    )
+
+
+def filter_answer(
+    answer: str,
+    cited_contents: list[str],
+    *,
+    min_coverage: float,
+    min_kept_ratio: float,
+    min_kept_sentences: int,
+) -> str | None:
+    """Вырезает неподдержанные предложения. None = недостаточно смысла → заглушка.
+
+    Сохраняет порядок и нумерацию списков; убирает лишь галлюцинирующие фразы
+    (вкл. иероглифы, выдуманные термины, нерелевантные куски).
+    """
+    sentences = split_sentences(answer)
+    if not sentences:
+        return None
+    bad = {i for i, _ in _mark_unsupported(sentences, cited_contents, min_coverage=min_coverage)}
+    kept = [s for i, s in enumerate(sentences) if i not in bad]
+    if not kept:
+        return None
+    content_kept = [s for s in kept if not _is_connector(s)]
+    content_orig = [s for s in sentences if not _is_connector(s)]
+    original_chars = sum(len(s) for s in sentences)
+    kept_chars = sum(len(s) for s in kept)
+    # Недостаточно смысла: вырезано почти всё ИЛИ остались только связки.
+    # Граница min_kept_sentences применяется только к развёрнутым ответам,
+    # чтобы короткие односложные grounded-ответы не превращались в заглушку.
+    if not content_kept:
+        return None
+    if original_chars > 0 and kept_chars / original_chars < min_kept_ratio:
+        return None
+    if len(content_orig) >= 4 and len(content_kept) < min_kept_sentences:
+        return None
+    return "\n".join(kept)

@@ -16,6 +16,8 @@ from app.db.models import Chunk, Document
 from app.db.session import async_session
 from app.ingest.parsers import SUPPORTED_EXTENSIONS
 from app.ingest.service import store
+from app.llm.client import ollama
+from app.llm.tokens import OllamaTokenCounter, configure_counter
 from app.sync.scanner import scan as scan_sources
 
 logger = logging.getLogger(__name__)
@@ -226,6 +228,29 @@ async def main() -> None:
     if not settings.telegram_bot_token:
         print("TELEGRAM_BOT_TOKEN не задан в .env. Получите токен у @BotFather.")
         sys.exit(1)
+    # Реальный токенайзер модели для точного контроля контекстного бюджета
+    # и чанкования (вместо cl100k, который занижает кириллицу/Qwen).
+    configure_counter(OllamaTokenCounter())
+    # Fail-fast: модель должна быть доступна — иначе молчаливый откат/галлюцинации.
+    try:
+        await ollama.ensure_model_ready()
+        print(f"Модель готова: {settings.llm_model}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"{exc}\nБот не запущен — восстанови Ollama/модель и попробуй снова.")
+        sys.exit(1)
+    # Чанкование переведено на реальный токенайзер: старые чанки (cl100k) дают
+    # неточный бюджет контекста — после обновления обязательна переиндексация.
+    async with async_session() as session:
+        chunks = (
+            await session.execute(
+                select(func.count(Chunk.id)).join(Document).where(Document.active.is_(True))
+            )
+        ).scalar_one()
+    if chunks:
+        print(
+            f"Внимание: в БД {chunks} активных чанков. После смены токенайзера "
+            "выполни `make reindex` для точного контекстного бюджета."
+        )
     bot = Bot(settings.telegram_bot_token)
     dp = build_dispatcher()
     if settings.source_list:

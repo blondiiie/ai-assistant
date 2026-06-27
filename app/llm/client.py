@@ -53,18 +53,61 @@ class OllamaClient:
         *,
         temperature: float = 0.0,
         options: dict[str, Any] | None = None,
+        seed: int | None = None,
     ) -> str:
+        sampling: dict[str, Any] = {
+            "temperature": temperature,
+            "num_ctx": self.num_ctx,
+            "top_p": settings.llm_top_p,
+            "repeat_penalty": settings.llm_repeat_penalty,
+        }
+        if seed is None:
+            seed = settings.llm_seed
+        sampling["seed"] = seed
+        if options:
+            sampling.update(options)
         payload: dict[str, Any] = {
             "model": self.chat_model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": temperature, "num_ctx": self.num_ctx, **(options or {})},
+            "options": sampling,
         }
         async with self._semaphore, httpx.AsyncClient(timeout=self.chat_timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
         if resp.status_code != 200:
             raise OllamaError(f"chat failed: {resp.status_code} {resp.text[:200]}")
         return resp.json()["message"]["content"].strip()
+
+    async def ensure_model_ready(self) -> None:
+        """Fail-fast: модель chat_model должна быть доступна И загружаема.
+
+        /api/show проверяет только наличие манифеста (без загрузки весов) —
+        поэтому дополнительно прогреваем модель крошечным чатом с keep_alive,
+        чтобы нехватка RAM/OOM проявилась на старте, а не на первом запросе.
+        """
+        async with httpx.AsyncClient(timeout=self.chat_timeout) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/api/show", json={"name": self.chat_model}
+                )
+            except httpx.HTTPError as exc:
+                raise OllamaError(
+                    f"Ollama недоступен на {self.base_url}: {exc}. "
+                    "Проверь: open -a OrbStack; ollama serve."
+                ) from exc
+        if resp.status_code != 200:
+            raise OllamaError(
+                f"Модель '{self.chat_model}' недоступна в Ollama "
+                f"(HTTP {resp.status_code}). Выполни: ollama pull {self.chat_model}"
+            )
+        # Прогрев: реальная загрузка весов. OOM случится здесь, не у пользователя.
+        warm = await self.chat(
+            [{"role": "user", "content": "ок"}],
+            temperature=0.0,
+            options={"num_predict": 1, "keep_alive": "30m"},
+        )
+        if warm is None:
+            raise OllamaError(f"Модель '{self.chat_model}' вернула пустой ответ при прогреве")
 
 
 ollama = OllamaClient()

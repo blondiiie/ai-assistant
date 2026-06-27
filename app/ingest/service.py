@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chunk, Document, DocumentLink
 from app.db.session import async_session
-from app.ingest.chunker import chunk_blocks
+from app.ingest.chunker import achunk_blocks
 from app.ingest.parsers import extract_md_links, parse
 from app.llm.client import ollama
 from app.schemas import ChunkMeta
@@ -17,7 +17,7 @@ EMBED_BATCH = 16
 
 async def parse_and_chunk(file_path: str, document_type: str) -> list[ChunkMeta]:
     blocks = parse(file_path, document_type)
-    return chunk_blocks(blocks)
+    return await achunk_blocks(blocks)
 
 
 async def _embed_chunks(metas: list[ChunkMeta]) -> list[list[float]]:

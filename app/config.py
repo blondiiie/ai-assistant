@@ -33,14 +33,56 @@ class Settings(BaseSettings):
 
     # --- Ollama (локальная, нативная) ---
     ollama_url: str = "http://localhost:11434"
-    llm_model: str = "qwen2.5:3b-instruct"
+    llm_model: str = "qwen2.5:7b-instruct"
     embed_model: str = "nomic-embed-text"
     embed_dimensions: int = 768
     llm_timeout: float = 120.0
     embed_timeout: float = 60.0
     llm_num_ctx: int = Field(
         default=4096,
-        description="Размер контекста LLM (окно). Меньше = меньше RAM под KV-кеш",
+        description="Размер контекстного окна LLM. Меньше = меньше RAM под KV-кеш",
+    )
+    # Резерв внутри окна под системный промпт + вопрос + ответ.
+    # Контекст чанков собирается до (llm_num_ctx - ctx_reserve) токенов.
+    ctx_reserve: int = Field(
+        default=1200,
+        description="Резерв токенов под system+вопрос+ответ (контекст не превышает окно)",
+    )
+
+    # --- Детерминированный сэмплинг (фикс «после рестарта ответы разные») ---
+    llm_seed: int = Field(
+        default=42,
+        description="Seed воспроизводимости генерации (стабильность ответов между запусками)",
+    )
+    llm_top_p: float = Field(
+        default=0.1,
+        description="Top-p: меньше = жёстче выбор, меньше дрейф и утечка токенов",
+    )
+    llm_repeat_penalty: float = Field(
+        default=1.1,
+        description="Штраф за повторы; снижает зацикливания и leakage",
+    )
+    llm_recovery_temperature: float = Field(
+        default=0.2,
+        description="Температура ТОЛЬКО для recovery (ложные отказы NOANSWER)",
+    )
+    llm_yesno_temperature: float = Field(
+        default=0.0,
+        description="Температура для yes/no fallback-обработчика",
+    )
+
+    # --- Grounding: пороги посентенсной фильтрации ---
+    grounding_sentence_coverage: float = Field(
+        default=0.55,
+        description="Мин. доля содержательных слов ПРЕДЛОЖЕНИЯ в контексте; иначе вырезаем",
+    )
+    grounding_min_kept_ratio: float = Field(
+        default=0.25,
+        description="Мин. доля оставшегося текста; ниже -> заглушка (insufficient)",
+    )
+    grounding_min_kept_sentences: int = Field(
+        default=2,
+        description="Мин. число оставленных содержательных предложений; ниже -> заглушка",
     )
 
     # --- RAG-параметры ---

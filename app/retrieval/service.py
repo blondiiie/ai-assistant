@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import PurePosixPath
 
@@ -8,7 +9,10 @@ from sqlalchemy import bindparam, text
 
 from app.config import settings
 from app.db.session import async_session
+from app.llm.tokens import acount_tokens
 from app.schemas import ChunkResult, RetrieveResult
+
+logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 _TOPIC_STOP = {
@@ -108,6 +112,35 @@ def _apply_topic_gate(rows: list[dict], query: str) -> list[dict]:
         if any(_topic_match(r["source_name"], r["section"], kw) for kw in keywords)
     ]
     return matched or rows
+
+
+async def _fit_budget(rows: list[dict]) -> list[dict]:
+    """Жёстко ограничивает совокупный объём чанков под контекстное окно.
+
+    Лечит молчаливое усечение Ollama: без лимита обзорные вопросы собирали
+    до 9 чанков и переполняли num_ctx, из-за чего модель теряла системный
+    промпт и начинала галлюцинировать. Чанки берутся по убыванию гибридного
+    скора; чанк крупнее всего бюджета отсекается; при исчерпании — останов.
+    """
+    budget = settings.llm_num_ctx - settings.ctx_reserve
+    if budget <= 0:
+        return rows
+    counts = [await acount_tokens(r["content"]) for r in rows]
+    kept: list[dict] = []
+    used = 0
+    for r, n in zip(rows, counts, strict=True):
+        if n > budget:
+            continue  # одиночный чанк крупнее окна всё равно переполнит — пропускаем
+        if used + n > budget and kept:
+            break  # бюджет исчерпан — ниже по скору брать бессмысленно
+        used += n
+        kept.append(r)
+    if len(kept) != len(rows):
+        logger.info(
+            "retrieval: budget fit %d->%d чанков, ~%d/%d токенов",
+            len(rows), len(kept), used, budget,
+        )
+    return kept
 
 
 def _resolve_neighbor_doc_ids(
@@ -212,6 +245,7 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
             top = top + extra[: settings.link_expansion_chunks]
 
     final = _hybrid_score(top, settings.hybrid_alpha)
+    final = await _fit_budget(final)
 
     results = [
         ChunkResult(
