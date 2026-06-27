@@ -76,3 +76,20 @@ class Chunk(Base):
     document: Mapped[Document] = relationship(back_populates="chunks")
 
     __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_chunks_doc_index"),)
+
+
+class DocumentLink(Base):
+    """Исходящие wikilinks MD-документа (граф Obsidian-заметок).
+
+    target_title — заголовок целевой заметки (basename без расширения),
+    напр. `[[Stateless]]` -> "Stateless". Разрешение в конкретный документ
+    выполняется при поиске (retrieval) по basename'у source_name.
+    """
+
+    __tablename__ = "document_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_doc_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_title: Mapped[str] = mapped_column(Text, nullable=False, index=True)

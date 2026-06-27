@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 
 from app.config import settings
-from app.generation.grounding import _content_tokens, is_supported
+from app.generation.grounding import (
+    _content_tokens,
+    is_refusal,
+    is_supported,
+    missing_distinctive_tokens,
+)
 from app.generation.prompt import CANNOT_ANSWER, build_messages
 from app.llm.client import ollama
 from app.schemas import ChunkResult, GenerateResult
@@ -45,12 +50,14 @@ async def answer(question: str, context_chunks: list[ChunkResult]) -> GenerateRe
     for attempt in range(settings.grounding_max_retries + 1):
         temperature = 0.0 if attempt == 0 else 0.3
         raw = await ollama.chat(messages, temperature=temperature)
-        if CANNOT_ANSWER in raw:
-            continue
+        if is_refusal(raw):
+            return GenerateResult(answer=STUB_ANSWER, cited_chunk_ids=[], grounded=False)
         cleaned = _clean(raw)
-        if not cleaned or cleaned == STUB_ANSWER:
+        if not cleaned or cleaned == STUB_ANSWER or is_refusal(cleaned):
             continue
         if is_supported(cleaned, all_contents, settings.grounding_min_overlap):
+            if missing_distinctive_tokens(cleaned, all_contents):
+                continue
             src_ids = _source_ids(cleaned, context_chunks, settings.source_overlap)
             return GenerateResult(answer=cleaned, cited_chunk_ids=src_ids, grounded=True)
 

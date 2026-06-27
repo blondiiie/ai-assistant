@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.generation.grounding import check, is_supported, parse_cited_ids
+from app.generation.grounding import (
+    check,
+    is_refusal,
+    is_supported,
+    missing_distinctive_tokens,
+    parse_cited_ids,
+)
 
 
 def test_parse_cited_ids() -> None:
@@ -44,3 +50,58 @@ def test_is_supported_rejects_hallucinated_terms() -> None:
         "Уровень 0: сервисы используют HTTP как транспорт и один HTTP-глагол POST"
     ]
     assert is_supported(answer, cited, min_overlap=0.35) is False
+
+
+def test_is_refusal_ascii_sentinel() -> None:
+    assert is_refusal("NOANSWER") is True
+    assert is_refusal("noanswer") is True
+    assert is_refusal("NOANSWER (отсутствуют сведения об архитектуре)") is True
+
+
+def test_is_refusal_russian_variants() -> None:
+    assert is_refusal("НЕВОЗМОЖНО ОТВЕТИТЬ") is True
+    assert is_refusal("Невозможно ответить, данных нет") is True
+    assert is_refusal("Не могу ответить") is True
+    assert is_refusal("Нет информации") is True
+
+
+def test_is_refusal_bug_repro_marker_with_parenthetical() -> None:
+    raw = (
+        "НЕВОЗМОЖНО_ОТВЕТИТЬ (отсутствуют сведения об архитектуре "
+        "клиента-сервера, кэшировании и передачи кода)"
+    )
+    assert is_refusal(raw) is True
+
+
+def test_is_refusal_not_triggered_by_legit_answer() -> None:
+    assert is_refusal("Подать заявление невозможно позже 14 дней") is False
+    assert is_refusal("") is False
+    assert is_refusal("Отпуск составляет 28 дней") is False
+
+
+def test_missing_distinctive_empty_when_supported() -> None:
+    answer = "JSON — это JavaScript Object Notation, значения: true, false, null"
+    cited = ["JSON (JavaScript Object Notation): true, false, null"]
+    assert missing_distinctive_tokens(answer, cited) == set()
+
+
+def test_missing_distinctive_catches_invented_http_codes() -> None:
+    # Модель выдумала HTTP-коды 200/400 — их нет в контексте про JSON.
+    answer = "JSON-объект содержит пары. Коды: 200 OK, 400 Bad Request, 404 Not Found"
+    cited = ["JSON-объект — неупорядоченный набор пар ключ:значение"]
+    missing = missing_distinctive_tokens(answer, cited)
+    assert "200" in missing
+    assert "400" in missing
+    assert "404" in missing
+
+
+def test_missing_distinctive_catches_invented_abbreviation() -> None:
+    answer = "REST использует протокол CRUD для операций."
+    cited = ["REST — концепция клиент-серверной архитектуры."]
+    assert "crud" in missing_distinctive_tokens(answer, cited)
+
+
+def test_missing_distinctive_ignores_trivial_latin() -> None:
+    answer = "This is true and done here"
+    cited = ["Заметка без латиницы"]
+    assert missing_distinctive_tokens(answer, cited) == set()

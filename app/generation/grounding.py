@@ -21,6 +21,27 @@ def parse_cited_ids(answer: str) -> list[int]:
     return [int(m) for m in CITED_RE.findall(answer)]
 
 
+_REFUSAL_FORMS = (
+    "noanswer",
+    "невозможноответить",
+    "немогуответить",
+    "нетинформации",
+    "недостаточноданных",
+)
+
+
+def _normalize_refusal(text: str) -> str:
+    s = re.sub(r"[^0-9a-zа-яё]+", "", text.lower())
+    return s.replace("ё", "е")
+
+
+def is_refusal(raw: str) -> bool:
+    if not raw:
+        return False
+    norm = _normalize_refusal(raw)
+    return any(norm.startswith(form) for form in _REFUSAL_FORMS)
+
+
 def _content_tokens(text: str) -> list[str]:
     return [t.lower() for t in WORD_RE.findall(text) if t.lower() not in _STOPWORDS]
 
@@ -59,3 +80,53 @@ def is_supported(
         cited_grams |= _char_ngrams(content)
     overlap = len(answer_grams & cited_grams) / len(answer_grams)
     return overlap >= min_overlap
+
+
+_NUM_RE = re.compile(r"\d{2,}")
+_LATIN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
+# Латинские токены, которые могут встречаться в связующем тексте и не являются
+# «особыми» терминами: не учитываем их при проверке выдуманных фактов.
+_LATIN_TRIVIAL = {
+    "true", "false", "null", "this", "that", "with", "from", "have", "been",
+    "were", "they", "them", "there", "here", "into", "upon", "over", "under",
+    "such", "each", "both", "more", "most", "than", "then", "when", "what",
+    "will", "would", "could", "should", "does", "done", "made", "make",
+}
+
+
+def _distinctive_tokens(text: str) -> tuple[set[str], set[str]]:
+    """Особые (фактические) токены ответа: числа (2+ цифр) и значимые латинские термины.
+
+    Именно такие токены, будучи выдуманными моделью, сигнализируют о галлюцинации
+    (HTTP-коды 200/400, несуществующие аббревиатуры и т.п.).
+    """
+    nums = set(_NUM_RE.findall(text))
+    latin = {
+        tok.lower()
+        for tok in _LATIN_RE.findall(text)
+        if tok.lower() not in _LATIN_TRIVIAL
+    }
+    return nums, latin
+
+
+def missing_distinctive_tokens(
+    answer: str,
+    cited_contents: list[str],
+) -> set[str]:
+    """Особые токены ответа, отсутствующие ни в одном чанке контекста.
+
+    Возвращает множество (в нижнем регистре для латиницы, как есть для чисел).
+    Пустое множество = все особые токены подтверждены контекстом.
+    """
+    if not cited_contents:
+        return set()
+    ctx_lower = " \n".join(c.lower() for c in cited_contents)
+    nums, latin = _distinctive_tokens(answer)
+    missing: set[str] = set()
+    for n in nums:
+        if n not in ctx_lower:
+            missing.add(n)
+    for tok in latin:
+        if tok not in ctx_lower:
+            missing.add(tok)
+    return missing

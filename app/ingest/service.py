@@ -5,10 +5,10 @@ from pathlib import Path
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chunk, Document
+from app.db.models import Chunk, Document, DocumentLink
 from app.db.session import async_session
 from app.ingest.chunker import chunk_blocks
-from app.ingest.parsers import parse
+from app.ingest.parsers import extract_md_links, parse
 from app.llm.client import ollama
 from app.schemas import ChunkMeta
 
@@ -69,6 +69,11 @@ async def store(
                         embedding=vector,
                     )
                 )
+            if document_type == "MD":
+                for target in extract_md_links(file_path):
+                    session.add(
+                        DocumentLink(source_doc_id=doc.id, target_title=target)
+                    )
         return doc.id, len(metas)
 
 

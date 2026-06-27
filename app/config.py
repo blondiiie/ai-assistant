@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     embed_timeout: float = 60.0
 
     # --- RAG-параметры ---
-    top_k: int = Field(default=3, description="Сколько чанков доставать из поиска")
+    top_k: int = Field(default=4, description="Сколько чанков доставать из поиска")
     top_k_broad: int = Field(
         default=6,
         description="Чанков для обзорных вопросов («расскажи всё/подробнее»)",
@@ -49,6 +49,13 @@ class Settings(BaseSettings):
         default=0.35,
         description="Порог косинусной СХОЖЕСТИ (1 - distance). Ниже = заглушка",
     )
+    sim_drop: float = Field(
+        default=0.15,
+        description=(
+            "Относительный разрыв: чанк отбрасывается, если его sim ниже "
+            "(max_sim - sim_drop). Дополняет абсолютный порог на однородных корпусах"
+        ),
+    )
     hybrid_alpha: float = Field(
         default=0.6,
         description="Вес векторного скоринга в гибридной формуле (1-alpha = лексический)",
@@ -56,6 +63,14 @@ class Settings(BaseSettings):
     retrieval_candidates: int = Field(
         default=20,
         description="Сколько кандидатов достаёт векторный поиск до реранка",
+    )
+    link_expansion: bool = Field(
+        default=True,
+        description="Расширять ли поиск по графу wikilinks (Obsidian-заметки)",
+    )
+    link_expansion_chunks: int = Field(
+        default=8,
+        description="Максимум доп. чанков из связанных заметок при расширении",
     )
     max_concurrent_llm: int = Field(
         default=1,

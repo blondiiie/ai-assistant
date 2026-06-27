@@ -20,6 +20,30 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
+def _wikilink_target(inner: str) -> str:
+    """Целевой заголовок заметки из тела [[...]]: до '|', до '#' (block/heading ref)."""
+    target = inner.split("|", 1)[0].strip()
+    target = target.split("#", 1)[0].strip()
+    return target
+
+
+def extract_md_links(file_path: str) -> list[str]:
+    """Уникальные цели wikilinks MD-файла (порядок сохранения первого вхождения).
+
+    Возвращает [] для пустого результата. Используется для построения графа заметок
+    и последующего расширения поиска по связанным заметкам.
+    """
+    with open(file_path, encoding="utf-8") as f:
+        raw = f.read()
+    text = _strip_frontmatter(raw)
+    seen: dict[str, None] = {}
+    for m in _WIKILINK_RE.finditer(text):
+        target = _wikilink_target(m.group(1))
+        if target:
+            seen.setdefault(target, None)
+    return list(seen)
+
+
 def _unfold_wikilink(match: re.Match[str]) -> str:
     inner = match.group(1)
     if "|" in inner:

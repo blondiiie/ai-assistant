@@ -50,6 +50,16 @@ STATEMENTS = [
     ON chunks USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64)
     """,
+    """
+    CREATE TABLE IF NOT EXISTS document_links (
+        id BIGSERIAL PRIMARY KEY,
+        source_doc_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        target_title TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_document_links_source ON document_links (source_doc_id)",
+    "CREATE INDEX IF NOT EXISTS ix_document_links_title ON document_links (target_title)",
+    "CREATE INDEX IF NOT EXISTS ix_documents_active_source ON documents (active, source_name)",
 ]
 
 

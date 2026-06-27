@@ -6,6 +6,9 @@ up:  ## Поднять Postgres+pgvector
 initdb:  ## Создать схему (расширения, таблицы, индексы)
 	uv run python -m app.db.init_db
 
+reindex:  ## Полное переиндексирование (очистка + скан). Применять после правок парсера
+	uv run python -m app.sync.reindex
+
 serve:  ## Запустить FastAPI
 	uv run uvicorn app.api.main:app --reload
 
