@@ -83,50 +83,24 @@ def is_supported(
 
 
 _NUM_RE = re.compile(r"\d{2,}")
-_LATIN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
-# Латинские токены, которые могут встречаться в связующем тексте и не являются
-# «особыми» терминами: не учитываем их при проверке выдуманных фактов.
-_LATIN_TRIVIAL = {
-    "true", "false", "null", "this", "that", "with", "from", "have", "been",
-    "were", "they", "them", "there", "here", "into", "upon", "over", "under",
-    "such", "each", "both", "more", "most", "than", "then", "when", "what",
-    "will", "would", "could", "should", "does", "done", "made", "make",
-}
-
-
-def _distinctive_tokens(text: str) -> tuple[set[str], set[str]]:
-    """Особые (фактические) токены ответа: числа (2+ цифр) и значимые латинские термины.
-
-    Именно такие токены, будучи выдуманными моделью, сигнализируют о галлюцинации
-    (HTTP-коды 200/400, несуществующие аббревиатуры и т.п.).
-    """
-    nums = set(_NUM_RE.findall(text))
-    latin = {
-        tok.lower()
-        for tok in _LATIN_RE.findall(text)
-        if tok.lower() not in _LATIN_TRIVIAL
-    }
-    return nums, latin
+_CITE_TAG_RE = re.compile(r"\[c\d+\]")
 
 
 def missing_distinctive_tokens(
     answer: str,
     cited_contents: list[str],
 ) -> set[str]:
-    """Особые токены ответа, отсутствующие ни в одном чанке контекста.
+    """Числа (2+ цифр) ответа, отсутствующие ни в одном чанке контекста.
 
-    Возвращает множество (в нижнем регистре для латиницы, как есть для чисел).
-    Пустое множество = все особые токены подтверждены контекстом.
+    Числа — высокоточный сигнал галлюцинации: выдуманные HTTP-коды (200/400),
+    статусы, статистика. Латинские термины намеренно НЕ проверяются: модель
+    может подставлять факт. верные расшифровки аббревиатур, что даёт ложные
+    срабатывания; для них достаточно 3-граммового overlap и правил промпта.
+    Возвращает числа, которых нет в контексте (пусто = все подтверждены).
     """
     if not cited_contents:
         return set()
+    answer = _CITE_TAG_RE.sub(" ", answer)
     ctx_lower = " \n".join(c.lower() for c in cited_contents)
-    nums, latin = _distinctive_tokens(answer)
-    missing: set[str] = set()
-    for n in nums:
-        if n not in ctx_lower:
-            missing.add(n)
-    for tok in latin:
-        if tok not in ctx_lower:
-            missing.add(tok)
-    return missing
+    nums = set(_NUM_RE.findall(answer))
+    return {n for n in nums if n not in ctx_lower}

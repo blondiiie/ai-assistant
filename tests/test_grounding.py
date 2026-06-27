@@ -96,9 +96,10 @@ def test_missing_distinctive_catches_invented_http_codes() -> None:
 
 
 def test_missing_distinctive_catches_invented_abbreviation() -> None:
+    # Латинские термины намеренно не проверяются — латиница не флагуется.
     answer = "REST использует протокол CRUD для операций."
     cited = ["REST — концепция клиент-серверной архитектуры."]
-    assert "crud" in missing_distinctive_tokens(answer, cited)
+    assert missing_distinctive_tokens(answer, cited) == set()
 
 
 def test_missing_distinctive_ignores_trivial_latin() -> None:
