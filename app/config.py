@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     embed_dimensions: int = 768
     llm_timeout: float = 120.0
     embed_timeout: float = 60.0
+    llm_num_ctx: int = Field(
+        default=4096,
+        description="Размер контекста LLM (окно). Меньше = меньше RAM под KV-кеш",
+    )
 
     # --- RAG-параметры ---
     top_k: int = Field(default=4, description="Сколько чанков доставать из поиска")

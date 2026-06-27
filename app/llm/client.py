@@ -21,12 +21,14 @@ class OllamaClient:
         embed_timeout: float = settings.embed_timeout,
         chat_timeout: float = settings.llm_timeout,
         max_concurrent: int = settings.max_concurrent_llm,
+        num_ctx: int = settings.llm_num_ctx,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.embed_model = embed_model
         self.chat_model = chat_model
         self.embed_timeout = embed_timeout
         self.chat_timeout = chat_timeout
+        self.num_ctx = num_ctx
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -56,7 +58,7 @@ class OllamaClient:
             "model": self.chat_model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": temperature, **(options or {})},
+            "options": {"temperature": temperature, "num_ctx": self.num_ctx, **(options or {})},
         }
         async with self._semaphore, httpx.AsyncClient(timeout=self.chat_timeout) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
