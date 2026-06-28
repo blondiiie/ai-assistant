@@ -27,7 +27,16 @@ class _FakeOllama:
     def __init__(self, reply: str) -> None:
         self._reply = reply
 
-    async def chat(self, messages, *, temperature=0.0, options=None):  # noqa: ANN001
+    async def chat(  # noqa: ANN001
+        self,
+        messages,
+        *,
+        temperature=0.0,
+        options=None,
+        seed=None,
+        top_p=None,
+        keep_alive=None,
+    ):
         return self._reply
 
 

@@ -91,6 +91,80 @@ _NUM_RE = re.compile(r"\d{2,}")
 CITE_TAG_RE = re.compile(r"\[c\d+\]")
 _STEM_LEN = 6
 
+
+# --- Этап 2.1: единый скоринговый grounding-гейт ---
+# Заменяет AND-каскад (3-граммы AND word_coverage AND distinctive_tokens),
+# где вероятности ложного отсева перемножались. Теперь — один score ∈ [0,1]
+# = среднее из трёх компонент. Принимаем при score >= grounding_threshold.
+
+
+def _word_coverage_ratio(answer: str, cited_contents: list[str]) -> float:
+    """Доля содержательных слов ответа (со стеммингом) в контексте ∈ [0,1]."""
+    if not cited_contents:
+        return 0.0
+    answer_stems = _content_stems(CITE_TAG_RE.sub(" ", answer))
+    if not answer_stems:
+        return 0.0
+    ctx_stems: set[str] = set()
+    for content in cited_contents:
+        ctx_stems |= _content_stems(content)
+    if not ctx_stems:
+        return 0.0
+    return len(answer_stems & ctx_stems) / len(answer_stems)
+
+
+def _trigram_overlap_ratio(answer: str, cited_contents: list[str]) -> float:
+    """Доля 3-грамм ответа, покрытых контекстом ∈ [0,1]."""
+    if not cited_contents:
+        return 0.0
+    answer_grams = _char_ngrams(answer)
+    if not answer_grams:
+        return 0.0
+    cited_grams: set[str] = set()
+    for content in cited_contents:
+        cited_grams |= _char_ngrams(content)
+    return len(answer_grams & cited_grams) / len(answer_grams)
+
+
+def _distinctive_tokens_ratio(answer: str, cited_contents: list[str]) -> float:
+    """Доля чисел (2+ цифр) ответа, подтверждённых контекстом ∈ [0,1].
+
+    Если чисел нет — 1.0 (нейтрально: проверка не применима). Если есть
+    выдуманные числа — падает пропорционально их доле.
+    """
+    if not cited_contents:
+        return 1.0
+    answer_clean = CITE_TAG_RE.sub(" ", answer)
+    nums = set(_NUM_RE.findall(answer_clean))
+    if not nums:
+        return 1.0
+    ctx_lower = " \n".join(c.lower() for c in cited_contents)
+    confirmed = {n for n in nums if n in ctx_lower}
+    return len(confirmed) / len(nums)
+
+
+def grounding_components(
+    answer: str,
+    cited_contents: list[str],
+) -> dict[str, float]:
+    """Компоненты единого grounding_score для логов/диагностики (Этап 3.1)."""
+    return {
+        "word_coverage": _word_coverage_ratio(answer, cited_contents),
+        "trigram_overlap": _trigram_overlap_ratio(answer, cited_contents),
+        "distinctive_tokens": _distinctive_tokens_ratio(answer, cited_contents),
+    }
+
+
+def grounding_score(answer: str, cited_contents: list[str]) -> float:
+    """Единый grounding_score ∈ [0,1] — среднее из трёх компонент (Этап 2.1).
+
+    Заменяет AND-каскад из пяти гейтов (вероятности перемножались → ложные
+    заглушки). Жёсткий отсев has_foreign_script остаётся отдельным сейфом.
+    Принимаем при score >= grounding_threshold (дефолт 0.5, настраивается).
+    """
+    comps = grounding_components(answer, cited_contents)
+    return sum(comps.values()) / len(comps)
+
 # Разрешённые «несмысловые» связки/маркеры списков — не режутся фильтром.
 _CONNECTOR_RE = re.compile(
     r"^(?:таким\s+образом|итак|следовательно|в\s+итоге|то\s+есть|"

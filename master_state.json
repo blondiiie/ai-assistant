@@ -1,29 +1,39 @@
 {
   "project_goal": "Личный RAG-ассистент по заметкам Obsidian-vault (Telegram-бот). Отвечает СТРОГО на основе заметок, связным текстом, БЕЗ галлюцинаций.",
-  "current_phase": "Рефакторинг анти-галлюцинационного ядра завершён: детерминированный сэмплинг, реальный токенайзер (токен-бюджет), посентенсная строгая фильтрация + запрет посторонних письменностей. 54 теста зелёные, ruff чист. Требуется живая переиндексация (make reindex) и проверка на REST-эталоне перед переходом к post-MVP.",
+  "current_phase": "РЕФАКТОРИНГ ПО ПЛАНУ ВЫПОЛНЕН (Этапы 0–3). Главная причина заглушек устранена: переиндексация выполнена (22 док., реальный токенайзер 3b), .env полон и синхронизирован с .env.example, модель переключена на qwen2.5:3b-instruct (RAM зелёная зона), grounding упрощён до единого скора, ретраи диверсифицированы. ДИАГНОСТИКА: 'расскажи всё про REST' → grounded=True, score=0.817, связный ответ с источником. СЛЕДУЮЩИЙ ШАГ: живой тест в Telegram (4 вопроса из answers.md + 3× REST после рестарта) и калибровка порогов на qa_corpus.json (Этап 4).",
   "completed_tasks": [
-    "Граф wikilinks: таблица document_links + extract_md_links + липкое расширение поиска по связям (лечит фрагментацию Obsidian: REST в 11 заметках). LINK_EXPANSION_CHUNKS=3.",
-    "Анти-галлюцинация многоуровневая: is_supported (3-граммы, морфология RU) + is_word_supported (доля содерж. слов ответа в контексте >=0.55) + missing_distinctive_tokens (числа 2+ цифр обязаны быть в контексте).",
-    "Промпт: смысл верен контексту, переформулировки РАЗРЕШЕНЫ, новых фактов/терминов/расшифровок — нет; явный запрет символов кроме кириллицы/латиницы/цифр/пунктуации; диспетчер типов вопросов + да/нет.",
-    "РЕФАКТОРИНГ фикс дрейфа после рестарта: (1) детерминизм — LLM_SEED=42, top_p=0.1, repeat_penalty=1.1, temp=0 для grounded-попыток (seed/top_p/repeat_penalty в payload Ollama); (2) реальный токенайзер модели app/llm/tokens.py (Ollama /api/tokenize, кеш) вместо cl100k — чанкование и контекст-бюджет; (3) токен-бюджет контекста retrieval _fit_budget (num_ctx - ctx_reserve, link_expansion по остатку) — лечит молчаливое усечение на обзорных; (4) has_foreign_script — ловит утечку иероглифов/арабицы (WORD_RE их не видел); (5) посентенсная filter_answer — вырезает неподдержанные предложения вместо целостной заглушки; (6) config default модели исправлен на 7b + fail-fast ensure_model_ready() в старте бота; (7) recovery только для NOANSWER (низкая temp), yes/no-fallback.",
-    "make reindex (CLI app/sync/reindex.py) — принудительное переиндексирование; теперь конфигурирует реальный токенайзер для чанкования.",
-    "54 юнит-теста зелёные (вкл. регрессию на REST-эталон, иероглифы, посентенсную фильтрацию, токен-бюджет), ruff чист."
+    "Этап 0.1: .env полностью синхронизирован с .env.example (все параметры: LLM_NUM_CTX=3072, CTX_RESERVE, LLM_SEED, LLM_TOP_P, LLM_REPEAT_PENALTY, GROUNDING_*, LLM_KEEPALIVE, LLM_RETRY_* и др.).",
+    "Этап 0.2: Переиндексация выполнена (make initdb + make reindex) — 22 документа, чанки нарезаны реальным токенайзером qwen2.5:3b-instruct.",
+    "Этап 1.1: Модель переключена на qwen2.5:3b-instruct (~2 ГБ RAM). 7b удалена из Ollama. RAM в зелёной зоне.",
+    "Этап 1.2: LLM_NUM_CTX снижен до 3072 (KV-кеш уменьшен).",
+    "Этап 1.3: keep_alive передаётся в payload /api/chat (LLM_KEEPALIVE=5m).",
+    "Этап 1.5: retrieval_candidates снижен до 12, top_k=4, top_k_broad=6.",
+    "Этап 1.6: docker-compose — shm_size=256m, oom_kill_disable (игнорируется ядром OrbStack).",
+    "Этап 2.1: Grounding упрощён — единый grounding_score (word_coverage + trigram_overlap + distinctive_tokens) вместо AND-каскада из 5 гейтов. Порог grounding_threshold=0.50.",
+    "Этап 2.2: Короткие ответы (< 3 предложений) проходят без посентенсной фильтрации и min_kept_sentences.",
+    "Этап 2.3: Осмысленные ретраи — попытка 0 (temp=0, seed=42), попытки 1..N (рост temp 0.2–0.4, seed+attempt, top_p=0.3). Детерминизм сохранён на попытке 0.",
+    "Этап 2.4: _clean возвращает пустую строку (маркер 'пусто'), а не STUB_ANSWER —上层 решает recovery/stub.",
+    "Этап 2.5: Recovery расширен — применяется при отказе ИЛИ при близком скоринге (score в [threshold-0.1, threshold)).",
+    "Этап 3.1: Структурированные логи grounding (gate, score, threshold, компоненты, длина, число предложений).",
+    "Этап 3.2: Диагностический CLI scripts/diagnose.py — воспроизводит пайплайн без Telegram, показывает retrieval/generation/grounding.",
+    "Этап 3.4: Кеш токенайзера на диск (data/token_cache.json) — убран round-trip к Ollama при старте.",
+    "59 юнит-тестов зелёные, ruff чист. Mock-тесты обновлены под новую сигнатуру chat() (keep_alive).",
+    "ДИАГНОСТИКА ПОДТВЕРЖДЕНА: 'расскажи всё про REST' → grounded=True, score=0.817, cited_chunk_ids=[126]."
   ],
   "active_issues": [
-    "ТРЕБУЕТСЯ переиндексация (make reindex) после смены токенайзера чанкования — без неё чанки нарезаны по cl100k и токен-бюджет считается на старых чанках.",
-    "ТРЕБУЕТСЯ живая проверка: воспроизвести «расскажи всё про REST» 3 раза после рестарта — ответ должен быть стабилен (seed) и без иероглифов/выдумок; сверить с эталоном.",
-    "Пороги GROUNDING_SENTENCE_COVERAGE/MIN_KEPT_RATIO/MIN_KEPT_SENTENCES и top_p/repeat_penalty подобраны эвристически — откалибровать на богатом корпусе (data/qa_corpus.json).",
-    "temp=0 не гарантирует 100% детерминизма у Ollama (зависит от backend), но seed+низкий top_p радикально снижают разброс — это и есть фикс «после рестарта».",
-    "Окружение нестабильно: OrbStack и Ollama периодически сами останавливаются — перед запуском бота проверять/поднимать (open -a OrbStack; docker compose up -d; ollama serve). Бот теперь падает с понятной ошибкой, если модель недоступна (ensure_model_ready).",
-    "ВНИМАНИЕ: 'docker compose down' удаляет контейнер (данные в томе pgdata сохраняются), 'docker compose stop' — только останавливает. Использовать stop для паузы."
+    "Калибровка порогов grounding_threshold/sim_threshold на богатом корпусе (data/qa_corpus.json) — текущие значения эвристические.",
+    "Живой тест в Telegram: 4 вопроса из answers.md + 3× 'расскажи всё про REST' после рестарта — проверить стабильность seed на попытке 0 и отсутствие выдумок.",
+    "Профиль RAM: снять график в течение 5 запросов — убедиться, что нет утечек и пик ≤ зелёной зоны.",
+    "has_foreign_script=True в raw-ответе диагностики (но grounding_score высокий) — проверить, не отсекает ли жёсткий гейт валидные ответы с техническими символами.",
+    "Окружение: OrbStack и Ollama периодически останавливаются сами — перед запуском бота проверять/поднимать."
   ],
   "next_steps": [
-    "1. Живая валидация рефакторинга (reindex + REST-эталон + 3 повтора после рестарта).",
-    "2. Калибровка порогов SIM_THRESHOLD / grounding_min_overlap / grounding_word_coverage / sentence_coverage на богатом корпусе.",
-    "3. Multi-turn: история диалога для уточняющих вопросов (post-MVP, явно просили).",
-    "4. Модульная архитектура источников: разделить ObsidianVaultSource / LocalFolderSource (сейчас единый сканер).",
-    "5. Устойчивость сравнительных вопросов к синонимичным формулировкам.",
+    "1. Этап 4.1: Sweep порогов через scripts/eval_pipeline.py (sim_threshold, grounding_threshold, top_p).",
+    "2. Этап 4.2: Живой тест в Telegram (4 вопроса answers.md + 3× REST после рестарта).",
+    "3. Этап 4.3: Профиль RAM (Activity Monitor/psutil, 5 запросов).",
+    "4. Multi-turn: история диалога для уточняющих вопросов (post-MVP).",
+    "5. Модульная архитектура источников: ObsidianVaultSource / LocalFolderSource.",
     "6. Версионирование документов (полное), OCR/таблицы, вынос за пределы ноутбука."
   ],
-  "environment": "macOS (darwin), MacBook Air M5 16ГБ/512ГБ. Python 3.12 (uv). Postgres 16+pgvector в Docker (OrbStack, том pgdata, mem_limit 512m). Ollama нативно: qwen2.5:7b-instruct (LLM) + nomic-embed-text (embeddings, dim=768). Детерминизм: LLM_SEED=42, top_p=0.1, repeat_penalty=1.1, temp=0 для grounded. Токенайзер: реальный (Ollama /api/tokenize, кеш). Git: ветка main, origin git@github.com:blondiiie/ai-assistant.git. Запуск бота: make bot (нужны OrbStack/Postgres/Ollama подняты; бот fail-fast проверяет модель)."
+  "environment": "macOS (darwin), MacBook Air M5 16ГБ/512ГБ. Python 3.12 (uv). Postgres 16+pgvector в Docker (OrbStack, том pgdata, mem_limit 512m, shm_size 256m). Ollama нативно: qwen2.5:3b-instruct (LLM, ~2 ГБ) + nomic-embed-text (embeddings, dim=768). Детерминизм: LLM_SEED=42, top_p=0.1, temp=0 на попытке 0; ретраи temp=0.2–0.4, top_p=0.3. Токенайзер: реальный (Ollama /api/tokenize, кеш на диске data/token_cache.json). Git: ветка main, origin git@github.com:blondiiie/ai-assistant.git. Запуск бота: make bot (нужны OrbStack/Postgres/Ollama; бот fail-fast проверяет модель)."
 }

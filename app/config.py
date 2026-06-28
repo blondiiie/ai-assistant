@@ -33,13 +33,16 @@ class Settings(BaseSettings):
 
     # --- Ollama (локальная, нативная) ---
     ollama_url: str = "http://localhost:11434"
-    llm_model: str = "qwen2.5:7b-instruct"
+    # Этап 1.1 рефакторинга: дефолт — 3b (~2 ГБ RAM) для MacBook Air 16 ГБ.
+    # 7b (~5 ГБ пик) оставлен как опция через LLM_MODEL (см. .env.example).
+    llm_model: str = "qwen2.5:3b-instruct"
     embed_model: str = "nomic-embed-text"
     embed_dimensions: int = 768
     llm_timeout: float = 120.0
     embed_timeout: float = 60.0
+    # Этап 1.2: снижено с 4096 — меньше KV-кеш, достаточно для личных заметок.
     llm_num_ctx: int = Field(
-        default=4096,
+        default=3072,
         description="Размер контекстного окна LLM. Меньше = меньше RAM под KV-кеш",
     )
     # Резерв внутри окна под системный промпт + вопрос + ответ.
@@ -48,14 +51,36 @@ class Settings(BaseSettings):
         default=1200,
         description="Резерв токенов под system+вопрос+ответ (контекст не превышает окно)",
     )
+    # Этап 1.3: keepalive Ollama. Удерживает модель в RAM между запросами
+    # (интерактив) и позволяет выгрузить её при простое (0).
+    llm_keepalive: str = Field(
+        default="5m",
+        description=(
+            "keep_alive Ollama: сколько модель держать в RAM после запроса "
+            "(напр. 5m, 30m; 0 — выгрузить сразу). Бюджет RAM."
+        ),
+    )
+    # Этап 3.4: кеш токенайзера на диск — убирает round-trip к Ollama при
+    # старте и зависимость от её доступности.
+    token_cache_path: str = Field(
+        default="data/token_cache.json",
+        description="Путь к файлу кеша токенайзера Ollama (data/token_cache.json)",
+    )
+    token_cache_enabled: bool = Field(
+        default=True,
+        description="Кешировать результаты /api/tokenize на диск (Этап 3.4)",
+    )
 
     # --- Детерминированный сэмплинг (фикс «после рестарта ответы разные») ---
+    # ВАЖНО:.seed/top_p/temp относятся к ПЕРВИЧНОЙ (нулевой) попытке генерации.
+    # Ретраи (grounding_max_retries) используют рост температуры и seed+attempt —
+    # иначе повторные попытки идентичны и бесполезны (Этап 2.3 плана рефакторинга).
     llm_seed: int = Field(
         default=42,
         description="Seed воспроизводимости генерации (стабильность ответов между запусками)",
     )
     llm_top_p: float = Field(
-        default=0.1,
+        default=0.2,
         description="Top-p: меньше = жёстче выбор, меньше дрейф и утечка токенов",
     )
     llm_repeat_penalty: float = Field(
@@ -70,6 +95,39 @@ class Settings(BaseSettings):
         default=0.0,
         description="Температура для yes/no fallback-обработчика",
     )
+    # Этап 2.3: осмысленные ретраи — сломать детерминизм ретраев.
+    # Попытка 0: temp=0, seed=llm_seed, top_p=llm_top_p (воспроизводимость).
+    # Попытки 1..N: рост temp + seed+attempt + расширенный top_p (диверсификация).
+    llm_retry_top_p: float = Field(
+        default=0.3,
+        description="Top-p для ретраев grounding (шире основной для диверсификации)",
+    )
+    llm_retry_base_temperature: float = Field(
+        default=0.2,
+        description=(
+            "Базовая температура ретраев; растёт с номером попытки "
+            "(attempt * base, до 0.4). Попытка 0 всегда temp=0 (воспроизводимость)."
+        ),
+    )
+
+    # --- Grounding (Этап 2.1: единый скоринговый гейт вместо AND-каскада) ---
+    # grounding_score = среднее(word_coverage, trigram_overlap, distinctive_tokens_ok)
+    # Принимаем при score >= grounding_threshold. Жёсткий отсев — has_foreign_script.
+    grounding_threshold: float = Field(
+        default=0.5,
+        description=(
+            "Единый порог grounding_score (Этап 2.1). Снижает кумулятивный ложный "
+            "отсеч AND-каскада. Калибровать на qa_corpus (Этап 4)."
+        ),
+    )
+    # Этап 2.5: recovery при близком скоринге — почти опирается на контекст.
+    grounding_recovery_margin: float = Field(
+        default=0.1,
+        description=(
+            "Запас под порогом для recovery: если score в "
+            "[threshold-margin, threshold) — повтор через recovery-промпт."
+        ),
+    )
 
     # --- Grounding: пороги посентенсной фильтрации ---
     grounding_sentence_coverage: float = Field(
@@ -80,6 +138,8 @@ class Settings(BaseSettings):
         default=0.25,
         description="Мин. доля оставшегося текста; ниже -> заглушка (insufficient)",
     )
+    # Этап 2.2: применяется только к развёрнутым ответам (>= 3 предложений).
+    # Короткие да/нет/термин/число проходят через единый скоринг без этого порога.
     grounding_min_kept_sentences: int = Field(
         default=2,
         description="Мин. число оставленных содержательных предложений; ниже -> заглушка",

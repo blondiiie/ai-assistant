@@ -94,8 +94,24 @@ async def cmd_help(message: Message) -> None:
         "Просто напиши свой вопрос текстом. Я найду ответ в твоих заметках "
         "и укажу источник. Если информации нет — честно скажу.\n\n"
         "Команды: /upload — загрузить файл, /rescan — переиндексировать, "
-        "/status — статистика."
+        "/status — статистика, /stop — выгрузить модель (освободить RAM)."
     )
+
+
+async def cmd_stop(message: Message) -> None:
+    """Этап 1.3: выгрузить LLM-модель из RAM для экономии памяти."""
+    if not _is_allowed(message):
+        await message.answer("Доступ запрещён. Обратитесь к администратору.")
+        return
+    try:
+        await ollama.unload_model()
+        await message.answer(
+            "✅ Модель выгружена из RAM. Следующий вопрос загрузит её снова "
+            "(первый ответ будет чуть дольше)."
+        )
+    except Exception:
+        logger.exception("unload_model failed for chat %s", message.chat.id)
+        await message.answer("Не удалось выгрузить модель. Подробности в логах.")
 
 
 async def cmd_upload(message: Message) -> None:
@@ -219,6 +235,7 @@ def build_dispatcher() -> Dispatcher:
     dp.message.register(cmd_upload, Command("upload"))
     dp.message.register(cmd_rescan, Command("rescan"))
     dp.message.register(cmd_status, Command("status"))
+    dp.message.register(cmd_stop, Command("stop"))
     dp.message.register(handle_document, F.document)
     dp.message.register(handle_question, F.text)
     return dp

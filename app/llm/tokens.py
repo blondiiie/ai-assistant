@@ -8,15 +8,25 @@
 HTTP-вызовы к Ollama делаются асинхронно (`acount`/`atokenize`), чтобы не
 блокировать event loop бота. Единый кеш заполняется и синхронным, и асинхронным
 путём, поэтому дублирования запросов нет.
+
+Этап 3.4 рефакторинга: результат `/api/tokenize` кешируется на диск
+(data/token_cache.json) — это убирает round-trip при каждом старте и точку
+отказа при недоступности Ollama на старте.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 import threading
+from pathlib import Path
 from typing import Protocol
 
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Кириллица в BPE-токенайзерах Qwen разбивается заметно мельче, чем латиница.
 _RU_CHARS_PER_TOKEN = 2.7
@@ -40,6 +50,62 @@ def _heuristic_count(text: str) -> int:
     return max(1, int(round(ru / _RU_CHARS_PER_TOKEN + other / _LAT_CHARS_PER_TOKEN)))
 
 
+# ---------------------------------------------------------------------------
+# Этап 3.4: дисковый кеш токенайзера
+# ---------------------------------------------------------------------------
+
+
+def _disk_cache_path() -> Path:
+    return Path(settings.token_cache_path)
+
+
+def _disk_cache_load() -> dict[str, list]:
+    """Загружает дисковый кеш в память. Пусто при ошибке."""
+    if not settings.token_cache_enabled:
+        return {}
+    path = _disk_cache_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            logger.info("tokens: загружен дисковый кеш (%d записей) из %s", len(data), path)
+            return data
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("tokens: не удалось прочитать дисковый кеш %s: %s", path, exc)
+    return {}
+
+
+def _disk_cache_save(data: dict[str, list]) -> None:
+    """Атомарно сохраняет дисковый кеш (write+rename)."""
+    if not settings.token_cache_enabled:
+        return
+    path = _disk_cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("tokens: не удалось сохранить дисковый кеш %s: %s", path, exc)
+
+
+def _cache_key(base_url: str, model: str, text: str) -> str:
+    """Строковый ключ для JSON-сериализации дискового кеша."""
+    return f"{base_url}|{model}|{text}"
+
+
+_disk_cache: dict[str, list] = _disk_cache_load()
+_disk_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# In-memory кеш + общая логика
+# ---------------------------------------------------------------------------
+
+
 def _cache_get(key: tuple[str, str, str]) -> tuple[object, ...] | None:
     with _cache_lock:
         return _cache.get(key)
@@ -50,6 +116,11 @@ def _cache_set(key: tuple[str, str, str], val: tuple[object, ...]) -> None:
         if len(_cache) >= _CACHE_MAX:
             _cache.clear()
         _cache[key] = val
+    # Этап 3.4: дублируем в дисковый кеш для следующего старта.
+    str_key = _cache_key(*key)
+    with _disk_lock:
+        _disk_cache[str_key] = list(val)
+        _disk_cache_save(_disk_cache)
 
 
 def _fetch_sync(base_url: str, model: str, text: str) -> tuple[object, ...]:
@@ -57,6 +128,16 @@ def _fetch_sync(base_url: str, model: str, text: str) -> tuple[object, ...]:
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    # Этап 3.4: проверяем дисковый кеш (оффлайн-старт без round-trip).
+    if settings.token_cache_enabled:
+        str_key = _cache_key(*key)
+        with _disk_lock:
+            disk_val = _disk_cache.get(str_key)
+        if disk_val is not None:
+            tokens = tuple(disk_val)
+            with _cache_lock:
+                _cache[key] = tokens
+            return tokens
     with httpx.Client(timeout=settings.embed_timeout) as client:
         resp = client.post(f"{base_url}/api/tokenize", json={"model": model, "text": text})
     resp.raise_for_status()
@@ -70,6 +151,15 @@ async def _fetch_async(base_url: str, model: str, text: str) -> tuple[object, ..
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    if settings.token_cache_enabled:
+        str_key = _cache_key(*key)
+        with _disk_lock:
+            disk_val = _disk_cache.get(str_key)
+        if disk_val is not None:
+            tokens = tuple(disk_val)
+            with _cache_lock:
+                _cache[key] = tokens
+            return tokens
     async with httpx.AsyncClient(timeout=settings.embed_timeout) as client:
         resp = await client.post(
             f"{base_url}/api/tokenize", json={"model": model, "text": text}

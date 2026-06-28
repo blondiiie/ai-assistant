@@ -41,7 +41,16 @@ class _FakeOllama:
     def __init__(self, reply: str) -> None:
         self._reply = reply
 
-    async def chat(self, messages, *, temperature=0.0, options=None):  # noqa: ANN001
+    async def chat(  # noqa: ANN001
+        self,
+        messages,
+        *,
+        temperature=0.0,
+        options=None,
+        seed=None,
+        top_p=None,
+        keep_alive=None,
+    ):
         return self._reply
 
 
@@ -191,8 +200,9 @@ def test_fit_budget_keeps_all_when_under(monkeypatch) -> None:
     assert asyncio.run(_fit_budget(rows)) == rows
 
 
-def test_settings_model_is_7b() -> None:
-    assert settings.llm_model == "qwen2.5:7b-instruct"
+def test_settings_model_is_3b() -> None:
+    # Этап 1.1 рефакторинга: дефолт переключён на 3b (RAM-бюджет 16 ГБ).
+    assert settings.llm_model == "qwen2.5:3b-instruct"
 
 
 # --- yes/no классификатор: не должен ловить wh-вопросы ---

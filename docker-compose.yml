@@ -11,9 +11,14 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Бережно к RAM (M5, 16 ГБ): ограничиваем память контейнера
+    # Бережно к RAM (M5, 16 ГБ): ограничиваем память контейнера.
+    # Этап 1.6 рефакторинга: shm_size для стабильности HNSW-индекса pgvector
+    # (сортировки/хэш-таблицы живут в shared memory) и oom_kill_disable,
+    # чтобы ядро не убивало postgres при пиковом запросе в жёлтой зоне.
     mem_limit: 512m
     mem_reservation: 128m
+    shm_size: 256m
+    oom_kill_disable: true
     command: >
       postgres
       -c shared_buffers=128MB
