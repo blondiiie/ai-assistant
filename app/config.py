@@ -40,24 +40,25 @@ class Settings(BaseSettings):
     embed_dimensions: int = 768
     llm_timeout: float = 120.0
     embed_timeout: float = 60.0
-    # Этап 1.2: снижено с 4096 — меньше KV-кеш, достаточно для личных заметок.
+    # Этап 1.2: 2048 для 3b-модели — личные заметки + RAM-бюджет 16 ГБ
+    # (KV-кеш ~0.5 ГБ vs ~1 ГБ при 3072). Синхронизировано с .env.example.
     llm_num_ctx: int = Field(
-        default=3072,
+        default=2048,
         description="Размер контекстного окна LLM. Меньше = меньше RAM под KV-кеш",
     )
     # Резерв внутри окна под системный промпт + вопрос + ответ.
     # Контекст чанков собирается до (llm_num_ctx - ctx_reserve) токенов.
     ctx_reserve: int = Field(
-        default=1200,
+        default=900,
         description="Резерв токенов под system+вопрос+ответ (контекст не превышает окно)",
     )
     # Этап 1.3: keepalive Ollama. Удерживает модель в RAM между запросами
     # (интерактив) и позволяет выгрузить её при простое (0).
     llm_keepalive: str = Field(
-        default="5m",
+        default="2m",
         description=(
             "keep_alive Ollama: сколько модель держать в RAM после запроса "
-            "(напр. 5m, 30m; 0 — выгрузить сразу). Бюджет RAM."
+            "(напр. 2m, 5m, 30m; 0 — выгрузить сразу). Бюджет RAM."
         ),
     )
     # Этап 3.4: кеш токенайзера на диск — убирает round-trip к Ollama при
@@ -114,10 +115,12 @@ class Settings(BaseSettings):
     # grounding_score = среднее(word_coverage, trigram_overlap, distinctive_tokens_ok)
     # Принимаем при score >= grounding_threshold. Жёсткий отсев — has_foreign_script.
     grounding_threshold: float = Field(
-        default=0.5,
+        default=0.55,
         description=(
             "Единый порог grounding_score (Этап 2.1). Снижает кумулятивный ложный "
-            "отсеч AND-каскада. Калибровать на qa_corpus (Этап 4)."
+            "отсеч AND-каскада. Этап 4.1: поднят с 0.5 до 0.55 по итогам sweep на "
+            "qa_corpus — отсекает слабые OOS-ответы (анти-галлюцинация ↑), сохраняя "
+            "JSON/HATEOAS/REST (score 0.7–0.98)."
         ),
     )
     # Этап 2.5: recovery при близком скоринге — почти опирается на контекст.

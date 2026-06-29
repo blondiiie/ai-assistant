@@ -42,11 +42,23 @@ async def sweep_thresholds(corpus: list[dict]) -> dict:
 
 
 def pick_threshold(results: dict) -> float:
+    """Этап 4.1: выбрать sim_threshold с max recall при fp_rate ≤ 0.2.
+
+    При равенстве recall/fp (частый случай на однородном корпусе) — выбираем
+    МАКСИМАЛЬНЫЙ порог: он строже и в проде даёт меньше ложных срабатываний
+    при том же recall. Ранее max() брал первый вставленный (минимальный) ключ —
+    это был баг: выбиралось 0.20 даже когда 0.50 давал тот же recall.
+    """
     candidates = [t for t, (recall, fp) in results.items() if recall >= 0.9 and fp <= 0.2]
     if candidates:
         return max(candidates)
-    best = max(results.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
-    return best[0]
+    # Нет комбинации с fp≤0.2 — берём max recall, при равенстве min fp, потом max порог
+    best_recall = max(r for r, _ in results.values())
+    best = max(
+        (t for t, (r, _) in results.items() if r == best_recall),
+        key=lambda t: (-results[t][1], t),
+    )
+    return best
 
 
 async def evaluate(corpus: list[dict], threshold: float) -> None:

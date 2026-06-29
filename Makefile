@@ -1,4 +1,4 @@
-.PHONY: up down venv install smoke test lint format
+.PHONY: up down venv install smoke test lint format profile-ram
 
 up:  ## Поднять Postgres+pgvector
 	docker compose up -d
@@ -35,3 +35,6 @@ lint:  ## Линтинг
 
 format:  ## Форматирование
 	uv run ruff format .
+
+profile-ram:  ## Профиль RAM (Этап 4.3): 5 запросов + метрики psutil, отчёт в data/ram_profile.json
+	uv run python -m scripts.profile_ram

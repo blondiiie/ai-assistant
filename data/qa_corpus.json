@@ -18,5 +18,14 @@
   {"id": 17, "q": "Какая столица Франции?", "type": "out_of_scope", "expect": []},
   {"id": 18, "q": "Как подключить принтер к ноутбуку?", "type": "out_of_scope", "expect": []},
   {"id": 19, "q": "Когда корпоратив в этом году?", "type": "out_of_scope", "expect": []},
-  {"id": 20, "q": "Как пройти в бухгалтерию?", "type": "out_of_scope", "expect": []}
+  {"id": 20, "q": "Как пройти в бухгалтерию?", "type": "out_of_scope", "expect": []},
+
+  {"id": 21, "q": "Что такое JSON?", "type": "relevant", "expect": ["javascript", "формат"]},
+  {"id": 22, "q": "Дай определение JSON", "type": "relevant", "expect": ["javascript", "формат"]},
+  {"id": 23, "q": "Что такое HATEOAS?", "type": "relevant", "expect": ["hypermedia", "уровень"]},
+  {"id": 24, "q": "Чем является HATEOAS?", "type": "relevant", "expect": ["hypermedia", "уровень"]},
+  {"id": 25, "q": "Расскажи всё про REST", "type": "relevant", "expect": ["парадигм", "stateless"]},
+  {"id": 26, "q": "Объясни мне REST", "type": "relevant", "expect": ["парадигм", "stateless"]},
+  {"id": 27, "q": "Какие коды HTTP ответов относятся к успешному ответу?", "type": "relevant", "expect": ["200"]},
+  {"id": 28, "q": "В чем отличие уровня 1 и уровня 2 в модели зрелости REST?", "type": "relevant", "expect": ["глагол", "уровень"]}
 ]

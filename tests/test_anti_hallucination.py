@@ -69,6 +69,33 @@ def test_has_foreign_script_accepts_ru_en_punct() -> None:
     assert has_foreign_script("Levels: 0, 1, 2, 3 [c1]") is False
 
 
+# --- Этап 5.4: регрессионные тесты фикса бага JSON/HATEOAS ---
+
+def test_has_foreign_script_accepts_technical_punctuation() -> None:
+    """Этап 5.2: техническая пунктуация из JSON/YAML/HTML/HTTP не триггерит гейт."""
+    # JSON: {} [] и кавычки
+    assert has_foreign_script('Пример: {"key": "value"} и массив [] [c1]') is False
+    # HTML-like / шаблоны: < > =
+    assert has_foreign_script("Тег <div class=\"x\"> или a = b [c1]") is False
+    # HTTP / конфиги / markdown: * + | @ # $ % ^ ~ ` _
+    http_syntax = (
+        "Headers: X-Api*key +token | pipe @at #tag $var %pct ^caret ~tilde `code` _under [c1]"
+    )
+    assert has_foreign_script(http_syntax) is False
+
+
+def test_has_foreign_script_still_catches_glyphs() -> None:
+    """Этап 5.4: защита от регрессии — чужие письменности по-прежнему ловятся."""
+    # Китайские иероглифы
+    assert has_foreign_script("REST — парадигма. 客户端 [c1]") is True
+    # Арабица
+    assert has_foreign_script("Принцип: واجهة единообразная [c1]") is True
+    # Японские каны
+    assert has_foreign_script("Уровень: クライアント [c1]") is True
+    # Тайские glyph'ы
+    assert has_foreign_script("Пример: แม่แบบ [c1]") is True
+
+
 # --- Посентенсная фильтрация ---
 
 def test_filter_answer_removes_hallucinated_sentence() -> None:
@@ -222,3 +249,129 @@ def test_yesno_accepts_real_yesno() -> None:
     assert _is_yesno("Является ли REST протоколом?") is True
     assert _is_yesno("Обязательно ли REST использует JSON?") is True
     assert _is_yesno("Это правда?") is True
+
+
+# --- Этап 5.4: сервисные тесты JSON/HATEOAS/REST с техническим синтаксисом ---
+
+JSON_NOTE = (
+    "JSON (JavaScript Object Notation) — текстовый формат обмена данными, "
+    "основанный на JavaScript. Формат независим от JS и используется в любом "
+    "языке программирования. Пример объекта: {\"name\": \"REST\", \"level\": 3}. "
+    "Массив значений: [1, 2, 3]. Структура: ключ:значение, разделённые запятыми. "
+    "Поддерживает типы: string, number, boolean, null, object, array."
+)
+
+
+@pytest.fixture
+def json_chunk() -> ChunkResult:
+    return ChunkResult(
+        chunk_id=122,
+        content=JSON_NOTE,
+        page=None,
+        section=None,
+        source_name="Obsidian Vault/Resourses/JSON/JSON.md",
+        score=0.8,
+    )
+
+
+HATEOAS_NOTE = (
+    "HATEOAS (Hypermedia As The Engine Of Application State) — ограничение "
+    "архитектуры REST, при котором сервер вместе с ответом передаёт клиенту "
+    "гипермедийные ссылки на доступные действия. Это последний уровень "
+    "зрелости REST (Уровень 3 по модели Ричардсона)."
+)
+
+
+@pytest.fixture
+def hateoas_chunk() -> ChunkResult:
+    return ChunkResult(
+        chunk_id=128,
+        content=HATEOAS_NOTE,
+        page=None,
+        section=None,
+        source_name="Obsidian Vault/Resurses/REST/HATEOAS.md",
+        score=0.8,
+    )
+
+
+def test_service_json_answer_is_grounded(monkeypatch, json_chunk) -> None:
+    """Этап 5.4: ответ про JSON с {}/[] проходит grounding, а не превращается в stub.
+
+    Главный кейс бага: до Этапа 5.2 {} и [] рубились has_foreign_script,
+    хотя grounding_score=0.984 (word_coverage=1.0). Теперь должно проходить.
+    """
+    answer = (
+        "JSON (JavaScript Object Notation) — текстовый формат обмена данными, "
+        "основанный на JavaScript. Пример объекта: {\"name\": \"REST\", \"level\": 3}. "
+        "Массив: [1, 2, 3]. Типы: string, number, boolean, null. [c122]"
+    )
+    monkeypatch.setattr(gen_service, "ollama", _FakeOllama(answer))
+    result = asyncio.run(gen_service.answer("что такое JSON", [json_chunk]))
+    assert result.grounded is True
+    assert "{" in result.answer or "[" in result.answer  # технические символы сохранены
+    assert 122 in result.cited_chunk_ids
+
+
+def test_service_hateoas_answer_is_grounded(monkeypatch, hateoas_chunk) -> None:
+    """Этап 5.4: фиксация текущего корректного поведения HATEOAS.
+
+    Баг HATEOAS не воспроизводится (починен на Этапе 2), но тест защищает
+    от регрессии при изменении порогов/фильтров.
+    """
+    answer = (
+        "HATEOAS (Hypermedia As The Engine Of Application State) — ограничение "
+        "архитектуры REST. Сервер передаёт гипермедийные ссылки на доступные "
+        "действия. Это Уровень 3 зрелости REST. [c128]"
+    )
+    monkeypatch.setattr(gen_service, "ollama", _FakeOllama(answer))
+    result = asyncio.run(gen_service.answer("что такое HATEOAS", [hateoas_chunk]))
+    assert result.grounded is True
+    assert 128 in result.cited_chunk_ids
+
+
+def test_service_rest_answer_with_technical_syntax_is_grounded(monkeypatch, rest_chunk) -> None:
+    """Этап 5.4: REST-ответ с HTML-like / техническим синтаксисом проходит grounding.
+
+    Защита от регрессии REST-кейса из master_state.json: там has_foreign_script=True
+    в raw-ответе диагностики REST (при grounding_score=0.817) — значит баг
+    проявлялся и на REST-ответах с техническими символами.
+    """
+    answer = (
+        "REST — парадигма проектирования API, не протокол. "
+        "Пример эндпоинта: GET /api/speakers?format=json <resource>. "
+        "Методы HTTP: GET, POST, PUT, DELETE. "
+        "Stateless — сервер не хранит сессию. Уровни зрелости: 0, 1, 2, 3. "
+        "REST не всегда требует HTTP или JSON. [c1]"
+    )
+    monkeypatch.setattr(gen_service, "ollama", _FakeOllama(answer))
+    result = asyncio.run(gen_service.answer("расскажи всё про REST", [rest_chunk]))
+    assert result.grounded is True
+    assert 1 in result.cited_chunk_ids
+
+
+# --- Этап 5.3: keyword-boost в retrieval ---
+
+def test_content_keyword_boost_rewards_term_in_content() -> None:
+    """Этап 5.3: чанк, содержащий термин в content, получает буст."""
+    from app.retrieval.service import _content_keyword_boost
+
+    rows = [
+        {"content": "JSON — текстовый формат обмена данными", "sim": 0.5, "lex": 0.1},
+        {"content": "REST — парадигма проектирования API", "sim": 0.5, "lex": 0.1},
+    ]
+    _content_keyword_boost(rows, ["json"])
+    assert rows[0]["keyword_boost"] > 0.0  # содержит "json"
+    assert rows[1]["keyword_boost"] == 0.0  # не содержит "json"
+
+
+def test_hybrid_score_keyword_boost_ranks_exact_match_higher() -> None:
+    """Этап 5.3: при равных sim/lex чанк с точным термином ранжируется выше."""
+    from app.retrieval.service import _hybrid_score
+
+    rows = [
+        {"sim": 0.6, "lex": 0.2, "content": "REST — парадигма проектирования API"},
+        {"sim": 0.6, "lex": 0.2, "content": "JSON (JavaScript Object Notation) — формат"},
+    ]
+    out = _hybrid_score([dict(r) for r in rows], alpha=0.6, keywords=["json"])
+    # Второй чанк содержит "json" → буст → выше score
+    assert out[1]["score"] > out[0]["score"]

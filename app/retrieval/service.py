@@ -32,7 +32,11 @@ CANDIDATE_SQL = text(
            d.id AS document_id,
            d.source_name,
            1 - (c.embedding <=> (:q)::vector) AS sim,
-           ts_rank(c.tsv, plainto_tsquery('russian', :qtext)) AS lex
+           ts_rank(
+               c.tsv,
+               plainto_tsquery('russian', :qtext)
+               || plainto_tsquery('simple', :qkeywords)
+           ) AS lex
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.active = true
@@ -54,7 +58,11 @@ NEIGHBOR_CHUNKS_SQL = text(
            d.id AS document_id,
            d.source_name,
            1 - (c.embedding <=> (:q)::vector) AS sim,
-           ts_rank(c.tsv, plainto_tsquery('russian', :qtext)) AS lex
+           ts_rank(
+               c.tsv,
+               plainto_tsquery('russian', :qtext)
+               || plainto_tsquery('simple', :qkeywords)
+           ) AS lex
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.active = true AND d.id IN :doc_ids
@@ -80,13 +88,37 @@ async def _embed_query(query: str) -> list[float]:
     return list(map(float, vectors[0]))
 
 
-def _hybrid_score(rows: list[dict], alpha: float) -> list[dict]:
+def _content_keyword_boost(rows: list[dict], keywords: list[str]) -> None:
+    """Этап 5.3: keyword-boost по content (не только source_name/section).
+
+    Точное вхождение термина запроса в текст чанка даёт буст гибридному скору.
+    Лечит слабый эмбеддинг короткого английского термина (JSON, HATEOAS, REST),
+    где стоп-слова «что»/«такое» доминируют в векторе вопроса и маскируют
+    релевантный чанк. Буст ограничен сверху (0.15), чтобы не перекрывать
+    семантическое сходство — лишь приподнять точные совпадения при прочих равных.
+    """
+    if not keywords:
+        return
+    for r in rows:
+        content_lower = r["content"].lower()
+        hits = sum(1 for kw in keywords if kw in content_lower)
+        r["keyword_boost"] = min(0.15, 0.05 * hits) if hits else 0.0
+
+
+def _hybrid_score(
+    rows: list[dict],
+    alpha: float,
+    keywords: list[str] | None = None,
+) -> list[dict]:
     max_sim = max((r["sim"] for r in rows), default=0.0) or 1.0
     max_lex = max((r["lex"] for r in rows), default=0.0) or 1e-9
+    if keywords:
+        _content_keyword_boost(rows, keywords)
     for r in rows:
         sim_norm = r["sim"] / max_sim
         lex_norm = r["lex"] / max_lex
-        r["score"] = alpha * sim_norm + (1 - alpha) * lex_norm
+        boost = r.get("keyword_boost", 0.0)
+        r["score"] = alpha * sim_norm + (1 - alpha) * lex_norm + boost
     return rows
 
 
@@ -181,13 +213,14 @@ async def _neighbor_chunks(
     qvec: list[float],
     query: str,
     vec_str: str,
+    qkeywords: str,
 ) -> list[dict]:
     if not doc_ids:
         return []
     async with async_session() as session:
         result = await session.execute(
             NEIGHBOR_CHUNKS_SQL,
-            {"doc_ids": doc_ids, "q": vec_str, "qtext": query},
+            {"doc_ids": doc_ids, "q": vec_str, "qtext": query, "qkeywords": qkeywords},
         )
         return [dict(r) for r in result.mappings().all()]
 
@@ -196,6 +229,11 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
     top_k = top_k or settings.top_k
     qvec = await _embed_query(query)
     vec_str = f"[{','.join(f'{x:.7f}' for x in qvec)}]"
+    # Этап 5.3: keywords для лексического буста (SQL plainto_tsquery('simple')
+    # + content keyword-boost). Латинские термины (JSON/HATEOAS) плохо стеммятся
+    # russian-конфигом → simple-конфигурация ловит их «как есть».
+    keywords = _query_keywords(query)
+    qkeywords = " ".join(keywords)
 
     async with async_session() as session:
         result = await session.execute(
@@ -203,6 +241,7 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
             {
                 "q": vec_str,
                 "qtext": query,
+                "qkeywords": qkeywords,
                 "candidates": settings.retrieval_candidates,
             },
         )
@@ -227,7 +266,7 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
 
     relevant = _apply_topic_gate(gapped, query)
 
-    scored = _hybrid_score(relevant, settings.hybrid_alpha)
+    scored = _hybrid_score(relevant, settings.hybrid_alpha, keywords=keywords)
     scored.sort(key=lambda r: r["score"], reverse=True)
     top = scored[:top_k]
     core_ids = {r["chunk_id"] for r in top}
@@ -238,13 +277,13 @@ async def search(query: str, top_k: int | None = None) -> RetrieveResult:
         neighbor_ids = _resolve_neighbor_doc_ids(
             top_doc_ids, top_stems, active_docs, all_links
         )
-        extra = await _neighbor_chunks(neighbor_ids, qvec, query, vec_str)
+        extra = await _neighbor_chunks(neighbor_ids, qvec, query, vec_str, qkeywords)
         if extra:
             extra = [r for r in extra if r["chunk_id"] not in core_ids]
             extra.sort(key=lambda r: r["sim"], reverse=True)
             top = top + extra[: settings.link_expansion_chunks]
 
-    final = _hybrid_score(top, settings.hybrid_alpha)
+    final = _hybrid_score(top, settings.hybrid_alpha, keywords=keywords)
     final = await _fit_budget(final)
 
     results = [
