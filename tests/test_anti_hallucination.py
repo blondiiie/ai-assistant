@@ -9,6 +9,7 @@ from app.generation import service as gen_service
 from app.generation.grounding import (
     filter_answer,
     has_foreign_script,
+    normalize_inline_lists,
     split_sentences,
     unsupported_sentences,
 )
@@ -161,6 +162,107 @@ def test_sentence_pure_number_is_unsupported() -> None:
 def test_split_sentences_preserves_list_items() -> None:
     s = split_sentences("1. Клиент-сервер.\n2. Stateless.\n3. Кэширование.")
     assert len(s) == 3
+
+
+# --- Этап 6: сохранение форматирования (абзацы, списки, нумерация) ---
+
+def test_filter_answer_preserves_paragraph_breaks() -> None:
+    """Этап 6: пустая строка между абзацами сохраняется, а не схлопывается в один \\n."""
+    answer = (
+        "REST — парадигма проектирования API, не протокол.\n"
+        "\n"
+        "Принципы включают кэширование и Stateless. [c1]"
+    )
+    refined = filter_answer(
+        answer, [REST_NOTE], min_coverage=0.55, min_kept_ratio=0.25, min_kept_sentences=2
+    )
+    assert refined is not None
+    assert "\n\n" in refined  # пустая строка-разделитель сохранена
+    assert "парадигма" in refined
+    assert "Принципы" in refined
+
+
+def test_filter_answer_preserves_numbered_list_structure() -> None:
+    """Этап 6: пункты нумерованного списка остаются каждый на своей строке."""
+    ctx = (
+        "Принципы REST:\n"
+        "1. Клиент-серверная архитектура.\n"
+        "2. Stateless — сервер не хранит сессию.\n"
+        "3. Кэширование.\n"
+    )
+    answer = (
+        "Принципы REST:\n"
+        "1. Клиент-серверная архитектура.\n"
+        "2. Stateless — сервер не хранит сессию.\n"
+        "3. Кэширование. [c1]"
+    )
+    refined = filter_answer(
+        answer, [ctx], min_coverage=0.55, min_kept_ratio=0.25, min_kept_sentences=2
+    )
+    assert refined is not None
+    lines = refined.split("\n")
+    # Каждый пункт списка — на отдельной строке (не слит в одну строку)
+    prefixes = ("1.", "2.", "3.")
+    numbered = [ln for ln in lines if ln.startswith(prefixes)]
+    assert len(numbered) == 3
+    assert "1. Клиент-серверная" in refined
+    assert "2. Stateless" in refined
+    assert "3. Кэширование" in refined
+
+
+def test_filter_answer_list_marker_glued_to_content() -> None:
+    """Этап 6: маркер «1.» не отрывается от содержимого пункта списка."""
+    ctx = (
+        "Принципы:\n1. Stateless — сервер не хранит сессию.\n"
+        "2. Кэширование — каждый ответ помечается.\n"
+    )
+    answer = (
+        "Принципы:\n"
+        "1. Stateless — сервер не хранит сессию.\n"
+        "2. Кэширование — каждый ответ помечается. [c1]"
+    )
+    refined = filter_answer(
+        answer, [ctx], min_coverage=0.55, min_kept_ratio=0.25, min_kept_sentences=2
+    )
+    assert refined is not None
+    # Нет «оторванных» маркеров на отдельной строке без содержимого
+    assert "\n1.\n" not in refined
+    assert "\n2.\n" not in refined
+
+
+def test_filter_answer_keeps_list_and_paragraph_separated() -> None:
+    """Этап 6: список и последующий абзац разделены пустой строкой."""
+    ctx = (
+        "Принципы REST: Stateless, кэширование.\n"
+        "REST не всегда требует HTTP или JSON."
+    )
+    answer = (
+        "Принципы REST:\n"
+        "- Stateless\n"
+        "- Кэширование\n"
+        "\n"
+        "REST не всегда требует HTTP или JSON. [c1]"
+    )
+    refined = filter_answer(
+        answer, [ctx], min_coverage=0.5, min_kept_ratio=0.2, min_kept_sentences=2
+    )
+    assert refined is not None
+    assert "\n\n" in refined  # разделитель между списком и абзацем
+    assert "- Stateless" in refined
+    assert "- Кэширование" in refined
+
+
+def test_filter_answer_collapses_excessive_blank_lines() -> None:
+    """Этап 6: подряд идущие пустые строки схлопываются в один разделитель."""
+    ctx = "REST — парадигма. Stateless — сервер не хранит сессию."
+    answer = "REST — парадигма.\n\n\n\nStateless — сервер не хранит сессию. [c1]"
+    refined = filter_answer(
+        answer, [ctx], min_coverage=0.55, min_kept_ratio=0.25, min_kept_sentences=2
+    )
+    assert refined is not None
+    assert "\n\n\n" not in refined  # максимум один пустой разделитель
+    assert "парадигма" in refined
+    assert "Stateless" in refined
 
 
 # --- Сервисный уровень: foreign-ответ -> заглушка ---
@@ -375,3 +477,99 @@ def test_hybrid_score_keyword_boost_ranks_exact_match_higher() -> None:
     out = _hybrid_score([dict(r) for r in rows], alpha=0.6, keywords=["json"])
     # Второй чанк содержит "json" → буст → выше score
     assert out[1]["score"] > out[0]["score"]
+
+
+# --- Этап 6.2: нормализация инлайн-списков ---
+
+def test_normalize_inline_bullet_list_after_colon() -> None:
+    """Этап 6.2: «...: - item - item» → каждый пункт с новой строки."""
+    text = (
+        "В качестве значений в JSON могут быть использованы: "
+        "- JSON-объект - Массив - Число - Строка."
+    )
+    result = normalize_inline_lists(text)
+    # Каждый маркер «-» теперь в начале своей строки
+    lines = result.split("\n")
+    bullet_lines = [ln for ln in lines if ln.startswith("- ")]
+    assert len(bullet_lines) == 4
+    assert "- JSON-объект" in result
+    assert "- Массив" in result
+    assert "- Число" in result
+    assert "- Строка" in result
+
+
+def test_normalize_inline_numbered_list_after_colon() -> None:
+    """Этап 6.2: «...: 1. item 2. item» → каждый пункт с новой строки."""
+    text = (
+        "Well-formed JSON соблюдает правила: "
+        "1. Данные в виде пар «ключ:значение» "
+        "2. Данные разделены запятыми "
+        "3. Объект внутри {} "
+        "4. Массив внутри []."
+    )
+    result = normalize_inline_lists(text)
+    lines = result.split("\n")
+    numbered = [ln for ln in lines if ln[:2] in {"1.", "2.", "3.", "4."}]
+    assert len(numbered) == 4
+    assert "1. Данные" in result
+    assert "2. Данные" in result
+    assert "3. Объект" in result
+    assert "4. Массив" in result
+
+
+def test_normalize_inline_lists_preserves_already_multiline() -> None:
+    """Этап 6.2: уже многострочные списки не дублируются/не ломаются."""
+    text = (
+        "Принципы:\n"
+        "- Stateless\n"
+        "- Кэширование"
+    )
+    result = normalize_inline_lists(text)
+    # Многострочный список остался без изменений (нет «: -» инлайн-паттерна)
+    assert result == text
+
+
+def test_normalize_inline_lists_ignores_hyphen_in_words() -> None:
+    """Этап 6.2: дефис в составе слов («HTTP-сервер») не считается списком.
+
+    Защита: инлайн-список ловится только когда перед «-» стоит «:» или «;»
+    с пробелом. HTTP-сервер — часть слова, не триггерит нормализацию.
+    """
+    text = "REST — это клиент-серверный HTTP-подход к проектированию API."
+    result = normalize_inline_lists(text)
+    assert result == text  # без изменений
+    assert "HTTP-подход" in result
+
+
+def test_normalize_inline_lists_does_not_touch_inline_numbers_without_colon() -> None:
+    """Этап 6.2: «1. 2. 3.» без «:»/«;» перед ним не считается списком.
+
+    Защита от ложного разбиения обычного текста с упоминанием чисел/нумерацией.
+    """
+    text = "Уровни зрелости: 0, 1, 2, 3. Версия 1.2 устарела."
+    result = normalize_inline_lists(text)
+    # «0, 1, 2, 3» — через запятую, не инлайн-нумерованный список
+    assert "0, 1, 2, 3" in result
+    # «1.2» — версия, не маркер списка
+    assert "1.2" in result
+
+
+def test_normalize_inline_lists_handles_real_user_example() -> None:
+    """Этап 6.2: полный кейс из баг-репорта пользователя (инлайн bullets + числа)."""
+    raw = (
+        "JSON (JavaScript Object Notation) — это текстовый формат обмена данными. "
+        "В качестве значений: - JSON-объект - Массив - Число - Строка. "
+        "Правила well-formed: 1. Пары ключ:значение 2. Разделены запятыми "
+        "3. Объект в {} 4. Массив в []."
+    )
+    result = normalize_inline_lists(raw)
+    # Маркированная часть: 4 пункта на отдельных строках
+    assert "\n- JSON-объект" in result
+    assert "\n- Массив" in result
+    assert "\n- Число" in result
+    assert "\n- Строка" in result
+    # Нумерованная часть: 4 пункта на отдельных строках
+    assert "\n1. Пары" in result
+    assert "\n2. Разделены" in result
+    assert "\n3. Объект" in result
+    assert "\n4. Массив" in result

@@ -267,6 +267,59 @@ def has_foreign_script(text: str) -> bool:
 
 _LIST_MARKER_RE = re.compile(r"^\d+[.)]?$|^[-*•]$")
 
+# Этап 6.2: детектор инлайн-списков. Модель qwen2.5:3b часто выдаёт перечисления
+# одной строкой: «...: - item - item» или «...: 1. item 2. item». Эти паттерны
+# ловят старт такого списка (двоеточие/точка-с-запятой + пробел + маркер).
+_BULLET_INLINE_RE = re.compile(r"([:;])[ \t]+(?=-[ \t]+\S)")
+_NUM_INLINE_RE = re.compile(r"([:;])[ \t]+(?=\d+\.[ \t]+\S)")
+
+
+def _split_inline_bullets(line: str) -> str:
+    """Разбивает инлайн маркированный список на строки по одной на пункт."""
+    m = _BULLET_INLINE_RE.search(line)
+    if not m:
+        return line
+    head = line[: m.start() + 1]  # включаем «:» / «;»
+    rest = line[m.end():]         # начинается с «- item - item ...»
+    # Первый «-» в начале rest не имеет предшествующего пробела — не трогаем,
+    # он уже маркер первого пункта. Остальные « - » (с пробелами) → «\n- ».
+    rest = re.sub(r"[ \t]+-[ \t]+", "\n- ", rest)
+    return head + "\n" + rest
+
+
+def _split_inline_numbers(line: str) -> str:
+    """Разбивает инлайн нумерованный список на строки по одной на пункт."""
+    m = _NUM_INLINE_RE.search(line)
+    if not m:
+        return line
+    head = line[: m.start() + 1]
+    rest = line[m.end():]  # начинается с «1. item 2. item ...»
+    # Первый «N.» в начале rest без предшествующего пробела — не трогаем.
+    # Остальные « N. » → «\nN. ».
+    rest = re.sub(r"[ \t]+(\d+\.)[ \t]+", r"\n\1 ", rest)
+    return head + "\n" + rest
+
+
+def normalize_inline_lists(text: str) -> str:
+    """Этап 6.2: преобразует инлайн-списки в многострочные (detected inline).
+
+    Модель qwen2.5:3b часто выдаёт перечисления одной строкой через маркеры:
+    «...: - item - item» или «...: 1. item 2. item». Функция разбивает такие
+    списки, ставя каждый пункт на отдельную строку. Уже многострочные списки
+    и обычный текст без маркеров после «:»/«;» не затрагиваются.
+
+    Обрабатывает построчно: маркеры списка считаются инлайн-списком только
+    если на той же строке перед первым маркером стоит «:» или «;» с пробелом —
+    это надёжный признак инлайн-перечисления и защита от ложных срабатываний
+    на дефисы в составе слов и обычную нумерацию в тексте.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        line = _split_inline_bullets(line)
+        line = _split_inline_numbers(line)
+        out.append(line)
+    return "\n".join(out)
+
 
 def split_sentences(text: str) -> list[str]:
     """Разбивает ответ на предложения/пункты списка, сохраняя структуру.
@@ -375,29 +428,90 @@ def filter_answer(
     min_kept_ratio: float,
     min_kept_sentences: int,
 ) -> str | None:
-    """Вырезает неподдержанные предложения. None = недостаточно смысла → заглушка.
+    """Вырезает неподдержанные предложения, сохраняя структуру ответа
+    (абзацы, списки, переносы строк). None = недостаточно смысла → заглушка.
 
-    Сохраняет порядок и нумерацию списков; убирает лишь галлюцинирующие фразы
-    (вкл. иероглифы, выдуманные термины, нерелевантные куски).
+    Этап 6 (форматирование): проходит по строкам ответа, сохраняя оригинальные
+    переводы строк и пустые строки между абзацами. В пределах строки каждое
+    предложение проверяется на опору контекстом; неподдержанные фрагменты
+    удаляются, поддержанные остаются на своих местах. Маркеры списков («1.»,
+    «-», «*») приклеиваются к следующему за ними содержимому — нумерация не
+    отрывается от текста пункта.
+
+    Прежний flatten-режим (split по \\n и [.!?] → "\\n".join) схлопывал пустые
+    строки между абзацами и разрывал пункты списков с несколькими предложениями,
+    из-за чего ответ приходил в Telegram «сплошным текстом» без абзацев и с
+    нарушенной нумерацией перечислений.
     """
-    sentences = split_sentences(answer)
-    if not sentences:
+    if not cited_contents:
         return None
-    bad = {i for i, _ in _mark_unsupported(sentences, cited_contents, min_coverage=min_coverage)}
-    kept = [s for i, s in enumerate(sentences) if i not in bad]
-    if not kept:
-        return None
-    content_kept = [s for s in kept if not _is_connector(s)]
-    content_orig = [s for s in sentences if not _is_connector(s)]
-    original_chars = sum(len(s) for s in sentences)
-    kept_chars = sum(len(s) for s in kept)
+    ctx_stems: set[str] = set()
+    for c in cited_contents:
+        ctx_stems |= _content_stems(c)
+    ctx_lower = " \n".join(c.lower() for c in cited_contents)
+
+    all_units: list[str] = []        # все «предложения» ответа (для статистики)
+    kept_units_flat: list[str] = []  # оставленные (для статистики)
+    output_lines: list[str] = []     # итоговые строки (с пустыми — разделителями)
+    original_chars = 0
+    kept_chars = 0
+
+    for raw_line in answer.split("\n"):
+        stripped = raw_line.strip()
+        if not stripped:
+            # Оригинальный разделитель абзацев — сохраняем как кандидат.
+            output_lines.append("")
+            continue
+        fragments = [f.strip() for f in _SENT_SPLIT_RE.split(stripped) if f.strip()]
+        if not fragments:
+            continue
+        # Приклеиваем маркеры списков к следующему фрагменту в пределах строки,
+        # чтобы номер/маркер не отрывался от содержимого пункта.
+        units: list[str] = []
+        i = 0
+        while i < len(fragments):
+            frag = fragments[i]
+            if _LIST_MARKER_RE.match(frag) and i + 1 < len(fragments):
+                units.append(f"{frag} {fragments[i + 1]}")
+                i += 2
+            else:
+                units.append(frag)
+                i += 1
+        original_chars += sum(len(u) for u in units)
+        kept_on_line: list[str] = []
+        for u in units:
+            all_units.append(u)
+            if has_foreign_script(u):
+                continue
+            if _sentence_supported(u, ctx_stems, ctx_lower, min_coverage=min_coverage):
+                kept_on_line.append(u)
+                kept_units_flat.append(u)
+                kept_chars += len(u)
+        if kept_on_line:
+            # Поддержанные фрагменты строки остаются на одной строке.
+            output_lines.append(" ".join(kept_on_line))
+        # иначе: строка полностью вырезана — не оставляем следа (без пустых «дыр»)
+
+    # Схлопываем подряд идущие пустые разделители в один, обрезаем края.
+    compact: list[str] = []
+    for line in output_lines:
+        if line == "" and compact and compact[-1] == "":
+            continue
+        compact.append(line)
+    while compact and compact[0] == "":
+        compact.pop(0)
+    while compact and compact[-1] == "":
+        compact.pop()
+
     # Недостаточно смысла: вырезано почти всё ИЛИ остались только связки.
     # Граница min_kept_sentences применяется только к развёрнутым ответам,
     # чтобы короткие односложные grounded-ответы не превращались в заглушку.
-    if not content_kept:
+    content_orig = [u for u in all_units if not _is_connector(u)]
+    content_kept = [u for u in kept_units_flat if not _is_connector(u)]
+    if not compact or not content_kept:
         return None
     if original_chars > 0 and kept_chars / original_chars < min_kept_ratio:
         return None
     if len(content_orig) >= 4 and len(content_kept) < min_kept_sentences:
         return None
-    return "\n".join(kept)
+    return "\n".join(compact)

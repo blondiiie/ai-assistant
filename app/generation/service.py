@@ -12,6 +12,7 @@ from app.generation.grounding import (
     grounding_score,
     has_foreign_script,
     is_refusal,
+    normalize_inline_lists,
     split_sentences,
 )
 from app.generation.prompt import (
@@ -59,6 +60,10 @@ def _is_yesno(question: str) -> bool:
 
 def _clean(raw: str) -> str:
     cleaned = CITE_TAG_RE.sub("", raw).replace(CANNOT_ANSWER, "").strip()
+    # Этап 6.2: нормализуем инлайн-списки ДО скоринга/фильтрации — чтобы
+    # grounding видел корректную структуру (отдельные пункты), а не слитный
+    # текст. Модель qwen2.5:3b часто выдаёт перечисления одной строкой.
+    cleaned = normalize_inline_lists(cleaned)
     return cleaned
 
 
