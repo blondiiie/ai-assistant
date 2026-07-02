@@ -573,3 +573,41 @@ def test_normalize_inline_lists_handles_real_user_example() -> None:
     assert "\n2. Разделены" in result
     assert "\n3. Объект" in result
     assert "\n4. Массив" in result
+
+
+# ===========================================================================
+# ЭТАП 7: маркер N) + нормализация к точке
+# ===========================================================================
+
+
+def test_normalize_inline_numbers_with_paren_marker() -> None:
+    """Этап 7.1: инлайн-список с маркером N) (со скобкой) разбивается на строки.
+
+    Модель копирует стиль источника, где списки заданы как «1) ... 2) ...».
+    Раньше normalize_inline_lists ловил только N. — список оставался слитным.
+    """
+    text = "Принципы REST: 1) Клиент-сервер 2) Stateless 3) Кэширование"
+    result = normalize_inline_lists(text)
+    # Каждый пункт — на отдельной строке
+    assert "\n1. Клиент-сервер" in result
+    assert "\n2. Stateless" in result
+    assert "\n3. Кэширование" in result
+
+
+def test_normalize_paren_numbered_list_to_dot() -> None:
+    """Этап 7.1: маркер N) нормализуется к N. для единообразия (вариант А)."""
+    text = "Правила: 1) Первый 2) Второй 3) Третий"
+    result = normalize_inline_lists(text)
+    # Все маркеры — с точкой, не со скобкой
+    assert "1)" not in result
+    assert "2)" not in result
+    assert "3)" not in result
+    assert "1. Первый" in result
+    assert "2. Второй" in result
+    assert "3. Третий" in result
+
+
+# Примечание: дедупликация повторяющихся выводов («Таким образом…» дважды)
+# решается на уровне промпта (правило 7), не кодовым Jaccard-фильтром —
+# Jaccard на стемах не отличает семантический повтор от разных фактов с общими
+# словами и может вырезать полезные разные предложения.
